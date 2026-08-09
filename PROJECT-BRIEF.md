@@ -5,8 +5,7 @@
 
 ## What this repo is
 
-A collection of Claude Code skills. Currently one: `claude-video-parser` (named
-`flow-recording-report` before v1.3.2).
+A collection of Claude Code skills. Currently one: `claude-video-parser`.
 
 ## Problem statement (narrow — keep it narrow)
 

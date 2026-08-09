@@ -25,12 +25,6 @@ Restart Claude Code. (Prefer a plain copy? `./scripts/install.sh` or
 `.\scripts\install.ps1` puts the skill into `~/.claude/skills/` instead; `--project` /
 `-Project` scopes it to the current repo.)
 
-> **Upgrading from v1.3.0 or earlier?** The plugin and skill used to be named
-> `flow-recording-report`; everything now shares one name so the catalog shows a single
-> entry. Run `/plugin uninstall flow-recording-report@claude-video-parser` once, then
-> install with the command above. If you used the copy scripts instead, delete the old
-> `~/.claude/skills/flow-recording-report` folder and re-run the installer.
-
 **2. Make sure ffmpeg is on PATH** — the only hard requirement:
 
 | | |
