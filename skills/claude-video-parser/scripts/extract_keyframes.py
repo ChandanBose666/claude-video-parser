@@ -34,8 +34,12 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, asdict
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from urllib.parse import urlparse
 
 VIDEO_SUFFIXES = {".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v", ".gif"}
 
@@ -63,6 +67,60 @@ def run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
     return subprocess.run(
         cmd, capture_output=True, text=True, errors="replace", **kw
     )
+
+
+# --------------------------------------------------------------------------- url input
+
+# Hosts whose share links are player pages, not video files. Getting the file out of
+# these needs a downloader (yt-dlp etc.), which is deliberately out of scope.
+PLAYER_PAGE_HOSTS = ("youtube.com", "youtu.be", "loom.com", "drive.google.com", "vimeo.com")
+
+
+def is_url(s: str) -> bool:
+    return bool(re.match(r"^https?://", s, re.IGNORECASE))
+
+
+def player_page_hint(url: str) -> str | None:
+    host = (urlparse(url).hostname or "").lower()
+    for known in PLAYER_PAGE_HOSTS:
+        if host == known or host.endswith("." + known):
+            return (
+                f"{host} links point at a player page, not the video file. "
+                "Use the site's download option and pass a direct video link "
+                "(one that serves the actual .mp4/.webm) or a local file instead."
+            )
+    return None
+
+
+def filename_from_url(url: str) -> str:
+    name = PurePosixPath(urlparse(url).path).name
+    name = re.sub(r"[^A-Za-z0-9._-]", "_", name)
+    if not name.strip("._"):
+        return "remote-video.mp4"
+    if PurePosixPath(name).suffix.lower() not in VIDEO_SUFFIXES:
+        name += ".mp4"
+    return name
+
+
+def download_video(url: str, dest_dir: Path) -> Path:
+    dest = dest_dir / filename_from_url(url)
+    req = urllib.request.Request(url, headers={"User-Agent": "claude-video-parser"})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            ctype = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if ctype in ("text/html", "application/xhtml+xml"):
+                die(
+                    f"{url} served {ctype} — a web page, not a video. Share/player "
+                    "links need their direct download URL (one that serves the video "
+                    "file itself)."
+                )
+            with open(dest, "wb") as fh:
+                shutil.copyfileobj(resp, fh)
+    except urllib.error.URLError as e:
+        die(f"download failed for {url}: {e}")
+    if not dest.exists() or dest.stat().st_size == 0:
+        die(f"download produced an empty file: {url}")
+    return dest
 
 
 def hhmmss(t: float) -> str:
@@ -816,7 +874,8 @@ def main() -> int:
         prog="extract_keyframes.py",
         description="Scene-change keyframe extraction tuned for UI screen recordings.",
     )
-    ap.add_argument("video", type=Path, help="path to the screen recording")
+    ap.add_argument("video",
+                    help="path to the screen recording, or a direct http(s) video URL")
     ap.add_argument("-o", "--out", type=Path, default=None,
                     help="output directory (default: ./<videoname>-keyframes)")
     ap.add_argument("--max-frames", type=int, default=14,
@@ -855,9 +914,18 @@ def main() -> int:
 
     require_binaries()
 
-    video: Path = args.video.expanduser().resolve()
-    if not video.exists():
-        die(f"no such file: {video}")
+    source_url: str | None = None
+    if is_url(args.video):
+        hint = player_page_hint(args.video)
+        if hint:
+            die(hint)
+        source_url = args.video
+        print(f"downloading {source_url} ...", file=sys.stderr)
+        video = download_video(source_url, Path(tempfile.mkdtemp(prefix="flowrec-url-")))
+    else:
+        video = Path(args.video).expanduser().resolve()
+        if not video.exists():
+            die(f"no such file: {video}")
     if video.suffix.lower() not in VIDEO_SUFFIXES:
         print(
             f"warning: {video.suffix} is not a recognised video suffix; trying anyway",
@@ -872,7 +940,8 @@ def main() -> int:
             die(f"--roi {x},{y},{w},{h} exceeds the {meta.width}x{meta.height} frame")
 
     # Traces and HARs carry the DOM/network/console the video cannot show.
-    richer = find_richer_artifacts(video)
+    # A downloaded URL has no siblings worth scanning.
+    richer = [] if source_url else find_richer_artifacts(video)
     if richer:
         print(
             f"warning: richer artifact(s) next to the video: {', '.join(richer)} — "
@@ -966,8 +1035,9 @@ def main() -> int:
     naive_2fps = int(meta.duration_s * 2) * visual_tokens(args.long_edge, int(args.long_edge * 0.5625))
     manifest = {
         "tool": "extract_keyframes.py",
-        "version": "1.3.0",
+        "version": "1.4.0",
         "video": asdict(meta),
+        "source_url": source_url,
         "selection": {
             "strategy": "uniform-fallback" if used_fallback else "scene-change + temporal-NMS",
             "seed_threshold": args.threshold,

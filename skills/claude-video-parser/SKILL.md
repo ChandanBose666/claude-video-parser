@@ -28,6 +28,12 @@ Confirm the file exists and get its duration before anything else:
 ffprobe -v error -show_entries format=duration:stream=width,height -of default=nw=1 <video>
 ```
 
+The extractor also accepts a **direct http(s) video URL** (a link that serves the actual
+`.mp4`/`.webm` file) — it downloads to a temp file first and records the `source_url` in
+the manifest. Player-page links (YouTube, Loom share, Google Drive, Vimeo) are rejected
+with guidance: ask the user for the site's direct-download link instead. For a URL, skip
+the ffprobe pre-check and pass the URL straight to the extractor.
+
 The extractor also checks for richer sibling artifacts (a `trace.zip`, any `.har`, a
 Cypress `screenshots/` directory beside the video) and reports them in its output and in
 the manifest's `richer_artifacts` field. **If any are found, stop and tell the user** — a

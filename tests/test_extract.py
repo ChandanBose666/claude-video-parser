@@ -209,6 +209,56 @@ def main() -> int:
         )
         check(mp.returncode != 0, "missing file exits non-zero")
 
+        # ---- URL input ---------------------------------------------------
+        # Serve the fixture over localhost: a direct video URL must work end to end.
+        import http.server
+        import threading
+
+        (tmp / "index.html").write_text("<html><body>not a video</body></html>")
+        handler = lambda *a, **kw: http.server.SimpleHTTPRequestHandler(
+            *a, directory=str(tmp), **kw)
+        httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        port = httpd.server_address[1]
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        try:
+            up = subprocess.run(
+                [sys.executable, str(EXTRACT),
+                 f"http://127.0.0.1:{port}/checkout-bug.mp4",
+                 "-o", str(tmp / "kf-url"), *fast],
+                capture_output=True, text=True,
+            )
+            check(up.returncode == 0, "direct video url exits 0", up.stderr[:300])
+            um_path = tmp / "kf-url" / "manifest.json"
+            check(um_path.exists(), "url run writes manifest.json")
+            if um_path.exists():
+                um = json.loads(um_path.read_text())
+                check(um.get("source_url") == f"http://127.0.0.1:{port}/checkout-bug.mp4",
+                      "manifest records the source url",
+                      f"got {um.get('source_url')!r}")
+                check(all((tmp / "kf-url" / f["file"]).exists() for f in um["frames"]),
+                      "url run extracts real frames")
+
+            # An HTML page is not a video: fail loudly with guidance.
+            hp = subprocess.run(
+                [sys.executable, str(EXTRACT),
+                 f"http://127.0.0.1:{port}/index.html", *fast],
+                capture_output=True, text=True,
+            )
+            check(hp.returncode != 0, "html url exits non-zero")
+            check("not a video" in hp.stderr.lower(),
+                  "html url error says it is not a video", hp.stderr[:200])
+        finally:
+            httpd.shutdown()
+
+        # Player-page links fail fast with guidance, before any network request.
+        yp = subprocess.run(
+            [sys.executable, str(EXTRACT), "https://www.youtube.com/watch?v=abc"],
+            capture_output=True, text=True,
+        )
+        check(yp.returncode != 0, "player-page url exits non-zero")
+        check("direct" in yp.stderr.lower(),
+              "player-page error asks for a direct video link", yp.stderr[:200])
+
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

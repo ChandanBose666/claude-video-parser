@@ -37,7 +37,8 @@ Optional but worth it: `tesseract` (`brew install tesseract` / `sudo apt install
 tesseract-ocr` / `winget install UB-Mannheim.TesseractOCR`) — adds grep-able OCR text for
 every extracted frame, so error strings are found before spending any visual tokens.
 
-**3. Use it** — drag the video into the prompt (or type its path) and say what you expected:
+**3. Use it** — drag the video into the prompt (or type its path, or paste a direct video
+URL) and say what you expected:
 
 > QA sent me this recording of checkout breaking — `./bug.mp4`. Expected: clicking Pay
 > reaches the confirmation page.
@@ -119,7 +120,6 @@ that's a perception layer, this is a reporting contract, and they stack.
 | `skills/claude-video-parser/` | The skill: SKILL.md, extractor script, evidence rules, report template |
 | `examples/` | Worked example: demo GIF, contact sheet, full bug report |
 | `tests/` | 79 checks across four suites + a real-recording validation harness (`tests/realworld/`) |
-| `PROJECT-BRIEF.md` | Design decisions, their reasoning, and the cost of reversing them |
 
 ## Test
 

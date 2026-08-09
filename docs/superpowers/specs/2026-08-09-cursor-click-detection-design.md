@@ -7,8 +7,7 @@ cursor/click detection"); design details decided autonomously per this doc.
 
 For each scene-change frame the extractor selects, estimate where the pointer
 was immediately before the UI reacted, so the bug report can say "the user
-clicked *here*" — the single biggest thing missing from the report
-(PROJECT-BRIEF gap #2).
+clicked *here*" — the single biggest thing missing from the report.
 
 ## Constraint
 

@@ -14,7 +14,6 @@ Extract `claude-skills.zip` so you end up with:
 ```
 E:\Claude-skills\
     README.md
-    PROJECT-BRIEF.md
     skills\
     tests\
     ...
@@ -102,13 +101,8 @@ git push -u origin main
 CI runs on push: Ubuntu + macOS + Windows, Python 3.10 and 3.12, plus a lint
 job. It should go green without changes.
 
-## 7. Point Claude at the brief
+## 7. Resume work
 
-When you resume work, open `PROJECT-BRIEF.md` in VSCode and tell Claude to read
-it. It carries the design decisions, the reasoning behind each one, the cost of
-reversing them, and a ranked list of what to do next.
-
-The top item on that list is the one that matters: **validate the thresholds
-against real screen recordings.** Everything is currently tuned against one
-synthetic fixture. Feed it three or four actual bug videos before adding any
-feature.
+When you resume work, open the repo in VSCode and start Claude Code — the README
+and `skills/claude-video-parser/SKILL.md` carry everything needed to pick the
+project back up.

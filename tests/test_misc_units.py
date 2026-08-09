@@ -66,6 +66,38 @@ def main() -> int:
     check(ek.suggest_roi((0, 0, 1280, 100), 1280, 720) == (0, 100, 1280, 620),
           "suggest: top banner hot -> lower area kept")
 
+    # ---- URL input ----------------------------------------------------------
+    check(ek.is_url("https://example.com/demo.mp4"), "url: https detected")
+    check(ek.is_url("http://example.com/demo.mp4"), "url: http detected")
+    check(not ek.is_url("C:\\videos\\demo.mp4"), "url: windows path is not a url")
+    check(not ek.is_url("./demo.mp4"), "url: relative path is not a url")
+    check(not ek.is_url("file:///tmp/demo.mp4"), "url: file scheme rejected")
+    check(not ek.is_url("ftp://example.com/demo.mp4"), "url: ftp scheme rejected")
+
+    for u in (
+        "https://www.youtube.com/watch?v=abc123",
+        "https://youtu.be/abc123",
+        "https://www.loom.com/share/abc123",
+        "https://drive.google.com/file/d/abc123/view",
+        "https://vimeo.com/123456",
+    ):
+        check(ek.player_page_hint(u) is not None,
+              f"url: player page rejected ({u.split('/')[2]})")
+    check(ek.player_page_hint("https://cdn.example.com/rec/demo.mp4") is None,
+          "url: direct video url passes the player-page gate")
+
+    check(ek.filename_from_url("https://x.com/a/b/demo.mp4?sig=1") == "demo.mp4",
+          "url: filename taken from path, query stripped",
+          f"got {ek.filename_from_url('https://x.com/a/b/demo.mp4?sig=1')!r}")
+    check(ek.filename_from_url("https://x.com/clip.webm") == "clip.webm",
+          "url: non-mp4 video suffix kept")
+    check(ek.filename_from_url("https://x.com/download") == "download.mp4",
+          "url: suffix-less basename gets .mp4",
+          f"got {ek.filename_from_url('https://x.com/download')!r}")
+    check(ek.filename_from_url("https://x.com/") == "remote-video.mp4",
+          "url: empty basename falls back to remote-video.mp4",
+          f"got {ek.filename_from_url('https://x.com/')!r}")
+
     # ---- find_richer_artifacts ---------------------------------------------
     tmp = Path(tempfile.mkdtemp(prefix="flowrec-misc-"))
     try:
