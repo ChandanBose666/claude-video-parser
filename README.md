@@ -83,6 +83,42 @@ The skill declines, on purpose, when a better artifact exists:
   `trace.zip` / `*.har` / Cypress `screenshots/` siblings automatically and tells you to
   read those first. The video is the fallback, not the primary.
 
+## Architecture
+
+```
+  video path ─ or ─ direct http(s) URL (downloaded first; player pages
+      │              like YouTube are rejected with a hint)
+      ▼
+┌─────────────────────── extract_keyframes.py ───────────────────────┐
+│                                                                    │
+│  probe metadata ──► richer-artifact check                          │
+│                     trace.zip / *.har / Cypress screenshots next   │
+│                     to the video? → "read that first" warning      │
+│      │                                                             │
+│      ▼                                                             │
+│  scene candidates (seed threshold 0.0015, optional --roi)          │
+│      │  └─ candidate flood? locate the hot region, suggest --roi   │
+│      ▼                                                             │
+│  temporal NMS (--min-gap) ─ near-static video? → uniform fallback  │
+│      ▼                                                             │
+│  pin initial + final state, extract frames (ffmpeg, downscaled)    │
+│      ├──► cursor/click inference (pre-transition motion scan)      │
+│      ├──► OCR pass (optional, tesseract, frames upscaled 2×)       │
+│      ▼                                                             │
+│  contact-sheet.jpg + frame-NN.jpg + manifest.json                  │
+└────────────────────────────────────────────────────────────────────┘
+      │
+      ▼
+  Claude reads the labelled contact sheet (~1k visual tokens)
+      │
+      ▼
+  BUG-REPORT.md — every claim tagged [O] / [I] / [?]
+```
+
+The extractor is a single stdlib-Python script shelling out to ffmpeg — no server, no
+background process, no state between runs. Everything it learned about the video lands in
+`manifest.json`, so the reasoning step is fully auditable.
+
 ## How it works, and why it's cheap
 
 **Scene thresholds calibrated for UI, not film.** ffmpeg's conventional scene threshold
@@ -112,6 +148,28 @@ candidates down to 2 and still caught the bug at its exact timestamp.
 keys, model downloads. Stdlib Python + ffmpeg. For per-segment variable-fps extraction or
 audio, compose with [`claude-video-vision`](https://github.com/jordanrendric/claude-video-vision) —
 that's a perception layer, this is a reporting contract, and they stack.
+
+## Configuration
+
+There is no config file, no environment variables, and no setup wizard — deliberately.
+When the skill runs inside Claude Code, Claude picks the flags. You only touch them when
+running the extractor directly:
+
+| Flag | Default | What it does |
+|---|---|---|
+| `-o, --out` | `./<videoname>-keyframes` | Output directory |
+| `--max-frames` | `14` | Hard cap on extracted frames |
+| `--min-gap` | `0.5` | Seconds of temporal suppression around each kept frame |
+| `--threshold` | `0.0015` | Seed scene threshold — measured UI transitions score 0.002–0.05 |
+| `--min-score` | `0.0` | Drop candidates below this; raise to ~0.005 if a noisy recording yields junk frames |
+| `--roi X,Y,W,H` | off | Score scene changes on this region only (frames still extracted full-size) |
+| `--long-edge` | `1024` | Downscale long edge in px (≈800 visual tokens per frame) |
+| `--quality` | `4` | JPEG quality, ffmpeg `-q:v` (2 = best, 31 = worst) |
+| `--cursor-window` | `1.5` | Seconds of pre-transition motion inspected for the pointer |
+| `--ocr-lang` | `eng` | Tesseract language(s), e.g. `eng+deu` |
+| `--sheet-cols`, `--sheet-tile` | `4`, `420` | Contact-sheet grid columns and tile width (px) |
+| `--no-cursor`, `--no-ocr`, `--no-contact-sheet` | — | Skip that stage |
+| `--json` | — | Print manifest JSON to stdout instead of the human summary |
 
 ## Repo layout
 
