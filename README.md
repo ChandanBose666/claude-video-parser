@@ -25,10 +25,11 @@ Restart Claude Code. (Prefer a plain copy? `./scripts/install.sh` or
 `.\scripts\install.ps1` puts the skill into `~/.claude/skills/` instead; `--project` /
 `-Project` scopes it to the current repo.)
 
-> **Upgrading from v1.3.0 or earlier?** The plugin used to be named
-> `flow-recording-report`; marketplace and plugin now share one name so the catalog shows
-> a single entry. Run `/plugin uninstall flow-recording-report@claude-video-parser` once,
-> then install with the command above.
+> **Upgrading from v1.3.0 or earlier?** The plugin and skill used to be named
+> `flow-recording-report`; everything now shares one name so the catalog shows a single
+> entry. Run `/plugin uninstall flow-recording-report@claude-video-parser` once, then
+> install with the command above. If you used the copy scripts instead, delete the old
+> `~/.claude/skills/flow-recording-report` folder and re-run the installer.
 
 **2. Make sure ffmpeg is on PATH** — the only hard requirement:
 
@@ -51,8 +52,8 @@ Claude extracts keyframes, reads the contact sheet, and writes `BUG-REPORT.md`. 
 whole workflow. You can also run the extractor directly:
 
 ```bash
-python3 skills/flow-recording-report/scripts/extract_keyframes.py bug.mp4 -o ./out
-python3 skills/flow-recording-report/scripts/extract_keyframes.py bug.mp4 --json   # machine-readable
+python3 skills/claude-video-parser/scripts/extract_keyframes.py bug.mp4 -o ./out
+python3 skills/claude-video-parser/scripts/extract_keyframes.py bug.mp4 --json   # machine-readable
 ```
 
 ## What you get
@@ -121,7 +122,7 @@ that's a perception layer, this is a reporting contract, and they stack.
 
 | Path | What |
 |---|---|
-| `skills/flow-recording-report/` | The skill: SKILL.md, extractor script, evidence rules, report template |
+| `skills/claude-video-parser/` | The skill: SKILL.md, extractor script, evidence rules, report template |
 | `examples/` | Worked example: demo GIF, contact sheet, full bug report |
 | `tests/` | 79 checks across four suites + a real-recording validation harness (`tests/realworld/`) |
 | `PROJECT-BRIEF.md` | Design decisions, their reasoning, and the cost of reversing them |

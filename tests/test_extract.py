@@ -17,7 +17,7 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-EXTRACT = ROOT / "skills" / "flow-recording-report" / "scripts" / "extract_keyframes.py"
+EXTRACT = ROOT / "skills" / "claude-video-parser" / "scripts" / "extract_keyframes.py"
 FIXTURE_SRC = ROOT / "tests" / "make_fixture.py"
 
 # Ground truth: the fixture holds each state for a known window.

@@ -14,7 +14,7 @@
   },
 
   "python.analysis.typeCheckingMode": "basic",
-  "python.analysis.extraPaths": ["skills/flow-recording-report/scripts"],
+  "python.analysis.extraPaths": ["skills/claude-video-parser/scripts"],
 
   "search.exclude": {
     "**/__pycache__": true,

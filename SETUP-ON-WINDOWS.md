@@ -66,7 +66,7 @@ generate the synthetic test video — the skill itself does not use it.
 .\scripts\install.ps1
 ```
 
-Installs to `%USERPROFILE%\.claude\skills\flow-recording-report`. Use
+Installs to `%USERPROFILE%\.claude\skills\claude-video-parser`. Use
 `-Project` instead to install into a single repo's `.claude\skills\`.
 
 Restart Claude Code. Confirm it registered by asking Claude what skills it has.

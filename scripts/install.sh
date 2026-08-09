@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Install the flow-recording-report skill for Claude Code.
+# Install the claude-video-parser skill for Claude Code.
 #   ./scripts/install.sh            -> ~/.claude/skills          (all projects)
 #   ./scripts/install.sh --project  -> ./.claude/skills          (this repo only)
 #   ./scripts/install.sh --force    -> overwrite existing install
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SRC="$REPO_ROOT/skills/flow-recording-report"
+SRC="$REPO_ROOT/skills/claude-video-parser"
 
 SCOPE="user"; FORCE=0
 for arg in "$@"; do
@@ -25,7 +25,7 @@ if [ "$SCOPE" = "project" ]; then
 else
   TARGET_ROOT="$HOME/.claude/skills"
 fi
-TARGET="$TARGET_ROOT/flow-recording-report"
+TARGET="$TARGET_ROOT/claude-video-parser"
 
 if [ -e "$TARGET" ] && [ "$FORCE" -eq 0 ]; then
   echo "already installed at $TARGET"

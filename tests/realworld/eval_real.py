@@ -28,7 +28,7 @@ from pathlib import Path
 
 SCRIPT = (
     Path(__file__).resolve().parents[2]
-    / "skills" / "flow-recording-report" / "scripts" / "extract_keyframes.py"
+    / "skills" / "claude-video-parser" / "scripts" / "extract_keyframes.py"
 )
 VARIANT_MARKERS = ("-30fps-", "-60fps-")
 

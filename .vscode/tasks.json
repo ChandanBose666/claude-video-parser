@@ -20,9 +20,9 @@
     {
       "label": "Run: extract keyframes from a video",
       "type": "shell",
-      "command": "python3 skills/flow-recording-report/scripts/extract_keyframes.py '${input:videoPath}' -o './out'",
+      "command": "python3 skills/claude-video-parser/scripts/extract_keyframes.py '${input:videoPath}' -o './out'",
       "windows": {
-        "command": "python skills\\flow-recording-report\\scripts\\extract_keyframes.py \"${input:videoPath}\" -o .\\out"
+        "command": "python skills\\claude-video-parser\\scripts\\extract_keyframes.py \"${input:videoPath}\" -o .\\out"
       },
       "presentation": { "reveal": "always", "panel": "dedicated", "clear": true },
       "problemMatcher": []

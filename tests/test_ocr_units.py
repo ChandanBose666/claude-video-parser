@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-EXTRACT = ROOT / "skills" / "flow-recording-report" / "scripts" / "extract_keyframes.py"
+EXTRACT = ROOT / "skills" / "claude-video-parser" / "scripts" / "extract_keyframes.py"
 
 spec = importlib.util.spec_from_file_location("extract_keyframes", EXTRACT)
 ek = importlib.util.module_from_spec(spec)

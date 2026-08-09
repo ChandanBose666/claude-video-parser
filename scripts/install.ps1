@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Install the flow-recording-report skill for Claude Code on Windows.
+  Install the claude-video-parser skill for Claude Code on Windows.
 
 .EXAMPLE
   .\scripts\install.ps1              # install to $HOME\.claude\skills (all projects)
@@ -16,7 +16,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$skillSrc = Join-Path $repoRoot 'skills\flow-recording-report'
+$skillSrc = Join-Path $repoRoot 'skills\claude-video-parser'
 
 if (-not (Test-Path $skillSrc)) {
     Write-Error "Skill source not found at $skillSrc"
@@ -27,7 +27,7 @@ $targetRoot = if ($Project) {
 } else {
     Join-Path $HOME '.claude\skills'
 }
-$target = Join-Path $targetRoot 'flow-recording-report'
+$target = Join-Path $targetRoot 'claude-video-parser'
 
 if ((Test-Path $target) -and -not $Force) {
     Write-Host "Already installed at $target" -ForegroundColor Yellow

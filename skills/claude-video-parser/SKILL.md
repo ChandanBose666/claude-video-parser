@@ -1,5 +1,5 @@
 ---
-name: flow-recording-report
+name: claude-video-parser
 description: Use when the user has a screen recording, screen capture, Loom, .mp4/.mov/.webm/.mkv/.gif, or CI test video of a UI flow that is broken, and wants it turned into a written bug report. Triggers on "QA sent me a video", "here's a recording of the bug", "watch this screen capture", "a customer sent a screen recording", "turn this video into a ticket", "what breaks in this recording". Do NOT use when the app is running locally and reproducible — drive the browser directly instead.
 license: MIT
 ---

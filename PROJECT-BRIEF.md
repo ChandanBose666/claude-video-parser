@@ -5,7 +5,8 @@
 
 ## What this repo is
 
-A collection of Claude Code skills. Currently one: `flow-recording-report`.
+A collection of Claude Code skills. Currently one: `claude-video-parser` (named
+`flow-recording-report` before v1.3.2).
 
 ## Problem statement (narrow — keep it narrow)
 
@@ -45,7 +46,7 @@ guardrails.** That is the whole product. Resist re-expanding it.
 ## Architecture
 
 ```
-skills/flow-recording-report/
+skills/claude-video-parser/
   SKILL.md                        trigger description + workflow + when NOT to use
   scripts/extract_keyframes.py    the only executable. probe → score → NMS → extract → sheet
   references/
