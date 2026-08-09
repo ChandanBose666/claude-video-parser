@@ -1,0 +1,28 @@
+{
+  "files.eol": "\n",
+  "files.trimTrailingWhitespace": true,
+  "files.insertFinalNewline": true,
+  "editor.rulers": [96],
+
+  "[python]": {
+    "editor.tabSize": 4,
+    "editor.formatOnSave": false
+  },
+  "[markdown]": {
+    "editor.wordWrap": "on",
+    "editor.quickSuggestions": { "comments": "off", "strings": "off", "other": "off" }
+  },
+
+  "python.analysis.typeCheckingMode": "basic",
+  "python.analysis.extraPaths": ["skills/flow-recording-report/scripts"],
+
+  "search.exclude": {
+    "**/__pycache__": true,
+    "**/*-keyframes": true,
+    "tests/fixtures/*.mp4": true
+  },
+
+  "files.associations": {
+    "SKILL.md": "markdown"
+  }
+}

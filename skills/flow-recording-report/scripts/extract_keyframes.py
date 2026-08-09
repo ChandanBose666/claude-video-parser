@@ -1,0 +1,498 @@
+#!/usr/bin/env python3
+"""
+extract_keyframes.py — deterministic scene-change keyframe extraction for UI screen recordings.
+
+Why not just sample at N fps:
+  A 45s screen recording at 2 fps is 90 frames. At ~1300 visual tokens each that is
+  ~117k tokens to describe one bug. Most of those frames are byte-identical to their
+  neighbour because a UI is static between interactions.
+
+Why not ffmpeg's default scene threshold (0.3):
+  ffmpeg's scene score is a whole-frame difference metric. In a screen recording only a
+  small region changes (a toast appears, a button turns grey, a row disappears), so real
+  UI transitions routinely score 0.02-0.12. A 0.3 threshold finds almost nothing on a UI
+  recording, which is why naive scene detection is usually abandoned for fps sampling.
+
+What this does instead:
+  1. Collect candidates with a deliberately LOW threshold (default 0.0015) so subtle UI
+     changes survive.
+  2. Rank candidates by scene score and apply temporal non-maximum suppression, so a
+     single 400ms animation contributes one frame instead of twelve.
+  3. Always pin a frame near the start and near the end (initial and final state).
+  4. Emit a labelled contact sheet so a model can orient on ONE image (~1-2k tokens)
+     before requesting individual full-resolution frames.
+
+Stdlib only. Requires ffmpeg + ffprobe on PATH.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import re
+import shutil
+import subprocess
+import sys
+from dataclasses import dataclass, asdict
+from pathlib import Path
+
+VIDEO_SUFFIXES = {".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v", ".gif"}
+
+
+# --------------------------------------------------------------------------- utils
+
+
+def die(msg: str, code: int = 1) -> "None":
+    print(f"error: {msg}", file=sys.stderr)
+    raise SystemExit(code)
+
+
+def require_binaries() -> None:
+    missing = [b for b in ("ffmpeg", "ffprobe") if shutil.which(b) is None]
+    if missing:
+        die(
+            f"missing required binary/binaries: {', '.join(missing)}. "
+            "Install ffmpeg (macOS: brew install ffmpeg | "
+            "Debian/Ubuntu: sudo apt install ffmpeg | "
+            "Windows: winget install Gyan.FFmpeg)"
+        )
+
+
+def run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        cmd, capture_output=True, text=True, errors="replace", **kw
+    )
+
+
+def hhmmss(t: float) -> str:
+    m, s = divmod(t, 60)
+    h, m = divmod(int(m), 60)
+    if h:
+        return f"{h:02d}:{m:02d}:{s:06.3f}"
+    return f"{m:02d}:{s:06.3f}"
+
+
+def visual_tokens(w: int, h: int) -> int:
+    """Claude bills images in 28x28 patches. See platform.claude.com vision docs."""
+    return math.ceil(w / 28) * math.ceil(h / 28)
+
+
+# ---------------------------------------------------------------------- ffprobe
+
+
+@dataclass
+class VideoMeta:
+    path: str
+    duration_s: float
+    width: int
+    height: int
+    fps: float
+    codec: str
+    has_audio: bool
+    size_mb: float
+
+
+def probe(path: Path) -> VideoMeta:
+    p = run(
+        [
+            "ffprobe", "-v", "error", "-print_format", "json",
+            "-show_format", "-show_streams", str(path),
+        ]
+    )
+    if p.returncode != 0:
+        die(f"ffprobe failed on {path.name}: {p.stderr.strip()[:400]}")
+    try:
+        data = json.loads(p.stdout)
+    except json.JSONDecodeError:
+        die(f"ffprobe returned unparseable JSON for {path.name}")
+
+    streams = data.get("streams", [])
+    v = next((s for s in streams if s.get("codec_type") == "video"), None)
+    a = next((s for s in streams if s.get("codec_type") == "audio"), None)
+    if v is None:
+        die(f"{path.name} contains no video stream")
+
+    fmt = data.get("format", {})
+    duration = float(fmt.get("duration") or v.get("duration") or 0.0)
+    if duration <= 0:
+        die(f"could not determine duration of {path.name} (got {duration})")
+
+    rate = v.get("avg_frame_rate") or v.get("r_frame_rate") or "0/1"
+    try:
+        num, den = (float(x) for x in rate.split("/"))
+        fps = num / den if den else 0.0
+    except (ValueError, ZeroDivisionError):
+        fps = 0.0
+
+    return VideoMeta(
+        path=str(path),
+        duration_s=duration,
+        width=int(v.get("width") or 0),
+        height=int(v.get("height") or 0),
+        fps=round(fps, 3),
+        codec=str(v.get("codec_name") or "unknown"),
+        has_audio=a is not None,
+        size_mb=round(int(fmt.get("size") or 0) / (1024 * 1024), 2),
+    )
+
+
+# ------------------------------------------------------------------ scene scores
+
+# ffmpeg's metadata=print emits pairs of lines:
+#   frame:0    pts:7507    pts_time:0.500467
+#   lavfi.scene_score=0.083103
+_FRAME_RE = re.compile(r"pts_time:([0-9]*\.?[0-9]+)")
+_SCORE_RE = re.compile(r"lavfi\.scene_score=([0-9]*\.?[0-9]+)")
+
+
+def scene_candidates(path: Path, seed_threshold: float) -> list[tuple[float, float]]:
+    """Return [(timestamp_seconds, scene_score)] for every frame above seed_threshold."""
+    p = run(
+        [
+            "ffmpeg", "-hide_banner", "-nostats", "-loglevel", "error",
+            "-i", str(path),
+            "-an", "-sn",
+            "-filter_complex",
+            f"select='gt(scene,{seed_threshold})',metadata=print:file=-",
+            "-f", "null", "-",
+        ]
+    )
+    # metadata=print:file=- writes to stdout; some builds interleave into stderr.
+    blob = (p.stdout or "") + "\n" + (p.stderr or "")
+
+    out: list[tuple[float, float]] = []
+    pending_t: float | None = None
+    for line in blob.splitlines():
+        m = _FRAME_RE.search(line)
+        if m:
+            pending_t = float(m.group(1))
+            continue
+        m = _SCORE_RE.search(line)
+        if m and pending_t is not None:
+            out.append((pending_t, float(m.group(1))))
+            pending_t = None
+    return out
+
+
+def suppress(
+    candidates: list[tuple[float, float]],
+    max_frames: int,
+    min_gap: float,
+    min_score: float,
+) -> list[tuple[float, float]]:
+    """Greedy temporal non-maximum suppression: strongest change wins its neighbourhood."""
+    kept: list[tuple[float, float]] = []
+    for t, score in sorted(candidates, key=lambda c: -c[1]):
+        if score < min_score:
+            break
+        if any(abs(t - kt) < min_gap for kt, _ in kept):
+            continue
+        kept.append((t, score))
+        if len(kept) >= max_frames:
+            break
+    return sorted(kept)
+
+
+def uniform_fallback(duration: float, n: int) -> list[tuple[float, float]]:
+    if n <= 1:
+        return [(duration / 2, 0.0)]
+    step = duration / (n + 1)
+    return [(step * (i + 1), 0.0) for i in range(n)]
+
+
+# ------------------------------------------------------------------- extraction
+
+
+@dataclass
+class FrameRec:
+    index: int
+    file: str
+    t: float
+    timestamp: str
+    scene_score: float
+    reason: str
+    est_visual_tokens: int
+
+
+def scale_filter(long_edge: int) -> str:
+    # Preserve aspect ratio, never upscale, force even dimensions for encoders.
+    return (
+        f"scale='if(gt(iw,ih),min({long_edge},iw),-2)':"
+        f"'if(gt(iw,ih),-2,min({long_edge},ih))':flags=lanczos"
+    )
+
+
+def grab_frame(video: Path, t: float, dest: Path, long_edge: int, quality: int) -> bool:
+    p = run(
+        [
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+            "-ss", f"{max(t, 0):.3f}", "-i", str(video),
+            "-frames:v", "1",
+            "-vf", scale_filter(long_edge),
+            "-q:v", str(quality),
+            str(dest),
+        ]
+    )
+    return p.returncode == 0 and dest.exists() and dest.stat().st_size > 0
+
+
+def png_or_jpg_size(path: Path) -> tuple[int, int]:
+    p = run(
+        [
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=width,height",
+            "-of", "csv=p=0:s=x", str(path),
+        ]
+    )
+    try:
+        w, h = p.stdout.strip().split("x")
+        return int(w), int(h)
+    except ValueError:
+        return 0, 0
+
+
+def has_drawtext() -> bool:
+    p = run(["ffmpeg", "-hide_banner", "-filters"])
+    return " drawtext " in (p.stdout or "")
+
+
+def _dt_escape(s: str) -> str:
+    """Escape a literal for ffmpeg drawtext's text= option."""
+    return s.replace("\\", "\\\\").replace(":", r"\:").replace("'", r"\'")
+
+
+def contact_sheet(
+    frames: list[FrameRec],
+    outdir: Path,
+    cols: int,
+    tile_w: int,
+    aspect: float,
+    label: bool,
+) -> str | None:
+    """One labelled grid image. Lets a model orient cheaply before pulling full frames.
+
+    `tile` consumes successive frames of a SINGLE stream, so the per-image chains are
+    concatenated first. Every tile is forced to identical dimensions because concat
+    rejects mismatched sizes.
+    """
+    if not frames:
+        return None
+
+    band = 26
+    body_h = max(2, int(round(tile_w * aspect)) // 2 * 2)
+    tile_h = body_h + band
+    rows = math.ceil(len(frames) / cols)
+    dest = outdir / "contact-sheet.jpg"
+
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y"]
+    for f in frames:
+        cmd += ["-i", str(outdir / f.file)]
+
+    chains = []
+    for i, f in enumerate(frames):
+        vf = (
+            f"scale={tile_w}:{body_h}:force_original_aspect_ratio=decrease:flags=lanczos,"
+            f"pad={tile_w}:{tile_h}:(ow-iw)/2:{band}:color=0x101014,"
+            f"setsar=1,format=yuv420p"
+        )
+        if label:
+            text = _dt_escape(f"{f.index:02d}  {f.timestamp}  {f.reason}")
+            vf += (
+                f",drawtext=text='{text}':x=8:y=4:fontsize=17:"
+                f"fontcolor=0xE6E6EA"
+            )
+        chains.append(f"[{i}:v]{vf}[t{i}]")
+
+    # Pad a ragged final row with blank tiles so the grid stays rectangular.
+    blanks = rows * cols - len(frames)
+    labels = "".join(f"[t{i}]" for i in range(len(frames)))
+    filt = ";".join(chains)
+    for b in range(blanks):
+        filt += (
+            f";color=c=0x101014:s={tile_w}x{tile_h}:d=1,setsar=1,"
+            f"format=yuv420p[b{b}]"
+        )
+        labels += f"[b{b}]"
+
+    n = rows * cols
+    filt += (
+        f";{labels}concat=n={n}:v=1:a=0[cat]"
+        f";[cat]tile={cols}x{rows}:padding=6:margin=6:color=0x101014[out]"
+    )
+
+    cmd += ["-filter_complex", filt, "-map", "[out]",
+            "-frames:v", "1", "-q:v", "4", str(dest)]
+    p = run(cmd)
+    if p.returncode != 0 or not dest.exists():
+        print(f"warning: contact sheet failed: {p.stderr.strip()[:300]}", file=sys.stderr)
+        return None
+    return dest.name
+
+
+# ------------------------------------------------------------------------- main
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        prog="extract_keyframes.py",
+        description="Scene-change keyframe extraction tuned for UI screen recordings.",
+    )
+    ap.add_argument("video", type=Path, help="path to the screen recording")
+    ap.add_argument("-o", "--out", type=Path, default=None,
+                    help="output directory (default: ./<videoname>-keyframes)")
+    ap.add_argument("--max-frames", type=int, default=14,
+                    help="hard cap on extracted frames (default: 14)")
+    ap.add_argument("--min-gap", type=float, default=0.5,
+                    help="seconds of temporal suppression around each kept frame (default: 0.5)")
+    ap.add_argument("--threshold", type=float, default=0.0015,
+                    help="seed scene threshold for candidate collection (default: 0.0015). "
+                         "Measured UI transitions score 0.002-0.05; ffmpeg's conventional 0.3 "
+                         "finds nothing on a screen recording.")
+    ap.add_argument("--min-score", type=float, default=0.0,
+                    help="drop candidates scoring below this (default: 0.0, i.e. keep all; raise to ~0.005 if a noisy recording yields junk frames)")
+    ap.add_argument("--long-edge", type=int, default=1024,
+                    help="downscale long edge in px (default: 1024 ~= 800 visual tokens)")
+    ap.add_argument("--quality", type=int, default=4,
+                    help="ffmpeg -q:v for JPEG output, 2=best 31=worst (default: 4)")
+    ap.add_argument("--no-contact-sheet", action="store_true",
+                    help="skip generating the grid overview image")
+    ap.add_argument("--sheet-cols", type=int, default=4)
+    ap.add_argument("--sheet-tile", type=int, default=420)
+    ap.add_argument("--json", action="store_true",
+                    help="print manifest JSON to stdout instead of the human summary")
+    args = ap.parse_args()
+
+    require_binaries()
+
+    video: Path = args.video.expanduser().resolve()
+    if not video.exists():
+        die(f"no such file: {video}")
+    if video.suffix.lower() not in VIDEO_SUFFIXES:
+        print(
+            f"warning: {video.suffix} is not a recognised video suffix; trying anyway",
+            file=sys.stderr,
+        )
+
+    meta = probe(video)
+
+    outdir: Path = (args.out or Path.cwd() / f"{video.stem}-keyframes").expanduser().resolve()
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    # 1. candidates -------------------------------------------------------------
+    cands = scene_candidates(video, args.threshold)
+    used_fallback = False
+
+    picks = suppress(cands, args.max_frames - 2, args.min_gap, args.min_score)
+
+    if len(picks) < 2:
+        # Static or near-static recording (e.g. a hang / frozen spinner bug).
+        used_fallback = True
+        picks = uniform_fallback(meta.duration_s, min(args.max_frames - 2, 6))
+
+    # 2. pin first and last state ----------------------------------------------
+    head = min(0.30, meta.duration_s * 0.02)
+    tail = max(meta.duration_s - 0.25, 0.0)
+    timeline: list[tuple[float, float, str]] = [(head, 0.0, "initial-state")]
+    for t, s in picks:
+        if abs(t - head) < 0.25 or abs(t - tail) < 0.25:
+            continue
+        timeline.append((t, s, "uniform-fallback" if used_fallback else "scene-change"))
+    timeline.append((tail, 0.0, "final-state"))
+    timeline.sort(key=lambda x: x[0])
+
+    # 3. extract ----------------------------------------------------------------
+    frames: list[FrameRec] = []
+    failures: list[float] = []
+    for i, (t, score, reason) in enumerate(timeline, start=1):
+        name = f"frame-{i:02d}.jpg"
+        dest = outdir / name
+        if not grab_frame(video, t, dest, args.long_edge, args.quality):
+            failures.append(t)
+            continue
+        w, h = png_or_jpg_size(dest)
+        frames.append(
+            FrameRec(
+                index=i,
+                file=name,
+                t=round(t, 3),
+                timestamp=hhmmss(t),
+                scene_score=round(score, 5),
+                reason=reason,
+                est_visual_tokens=visual_tokens(w, h) if w and h else 0,
+            )
+        )
+
+    if not frames:
+        die("extracted zero frames — the file may be corrupt or use an unsupported codec")
+
+    # renumber contiguously after any failures
+    for new_i, f in enumerate(frames, start=1):
+        f.index = new_i
+
+    # 4. contact sheet ----------------------------------------------------------
+    sheet = None
+    if not args.no_contact_sheet:
+        aspect = (meta.height / meta.width) if meta.width else 0.5625
+        sheet = contact_sheet(
+            frames, outdir, args.sheet_cols, args.sheet_tile, aspect, has_drawtext()
+        )
+
+    # 5. manifest ---------------------------------------------------------------
+    total_tokens = sum(f.est_visual_tokens for f in frames)
+    naive_2fps = int(meta.duration_s * 2) * visual_tokens(args.long_edge, int(args.long_edge * 0.5625))
+    manifest = {
+        "tool": "extract_keyframes.py",
+        "version": "1.0.0",
+        "video": asdict(meta),
+        "selection": {
+            "strategy": "uniform-fallback" if used_fallback else "scene-change + temporal-NMS",
+            "seed_threshold": args.threshold,
+            "min_score": args.min_score,
+            "min_gap_s": args.min_gap,
+            "max_frames": args.max_frames,
+            "candidates_found": len(cands),
+            "frames_kept": len(frames),
+            "extraction_failures_at": failures,
+        },
+        "cost": {
+            "long_edge_px": args.long_edge,
+            "est_visual_tokens_all_frames": total_tokens,
+            "est_visual_tokens_naive_2fps": naive_2fps,
+        },
+        "contact_sheet": sheet,
+        "frames": [asdict(f) for f in frames],
+        "notes": [
+            "Audio is not processed. This tool is visual-only by design.",
+            "scene_score 0.0 means the frame was pinned (initial/final state) or "
+            "selected by uniform fallback, not that nothing changed.",
+        ],
+    }
+    (outdir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    if args.json:
+        print(json.dumps(manifest, indent=2))
+        return 0
+
+    print(f"video       {video.name}  ({meta.width}x{meta.height}, "
+          f"{meta.duration_s:.1f}s, {meta.fps:g}fps, audio={'yes' if meta.has_audio else 'no'})")
+    print(f"strategy    {manifest['selection']['strategy']}  "
+          f"({len(cands)} candidates -> {len(frames)} frames)")
+    print(f"output      {outdir}")
+    if sheet:
+        print(f"overview    {sheet}   <- look at this first")
+    print(f"est. cost   ~{total_tokens:,} visual tokens for all frames "
+          f"(naive 2fps would be ~{naive_2fps:,})")
+    if used_fallback:
+        print("note        no meaningful scene changes detected; the UI may be frozen, "
+              "or lower --threshold and retry")
+    if failures:
+        print(f"warning     {len(failures)} frame(s) failed to extract")
+    print()
+    for f in frames:
+        print(f"  {f.index:02d}  {f.timestamp}  score={f.scene_score:<8} {f.reason:<16} {f.file}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

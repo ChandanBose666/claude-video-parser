@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+*-keyframes/
+tests/fixtures/*.mp4
+tests/fixtures/_frames/
+out/
+.DS_Store
+Thumbs.db
+.idea/
+*.log

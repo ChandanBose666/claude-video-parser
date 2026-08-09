@@ -1,0 +1,46 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Test: extractor end-to-end",
+      "type": "shell",
+      "command": "python3 tests/test_extract.py",
+      "windows": { "command": "python tests\\test_extract.py" },
+      "group": { "kind": "test", "isDefault": true },
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "Build: synthetic fixture video",
+      "type": "shell",
+      "command": "python3 tests/make_fixture.py tests/fixtures/checkout-bug.mp4",
+      "windows": { "command": "python tests\\make_fixture.py tests\\fixtures\\checkout-bug.mp4" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Run: extract keyframes from a video",
+      "type": "shell",
+      "command": "python3 skills/flow-recording-report/scripts/extract_keyframes.py '${input:videoPath}' -o './out'",
+      "windows": {
+        "command": "python skills\\flow-recording-report\\scripts\\extract_keyframes.py \"${input:videoPath}\" -o .\\out"
+      },
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "Install skill (user scope)",
+      "type": "shell",
+      "command": "./scripts/install.sh",
+      "windows": { "command": "powershell -ExecutionPolicy Bypass -File .\\scripts\\install.ps1" },
+      "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "videoPath",
+      "type": "promptString",
+      "description": "Path to the screen recording",
+      "default": "tests/fixtures/checkout-bug.mp4"
+    }
+  ]
+}
