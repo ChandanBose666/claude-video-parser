@@ -35,6 +35,16 @@ a rendered error boundary, a visible request ID — that is OBSERVED. Quote it e
 for character, and cite the frame. Do not paraphrase error strings; the exact string is often
 greppable in the codebase and is the single most valuable thing in the report.
 
+## Cursor estimates are always INFERRED
+
+When the manifest carries a `cursor` entry for a frame, it was derived from pre-transition
+motion analysis — the pointer was never read directly. Cite it as INFERRED with its
+confidence: `The user appears to have clicked near (1105, 562) — the "Continue" button
+region (cursor estimate, high confidence, frame 04).` When `cursor` is null, say nothing
+about where the user clicked; null means no reliable estimate, not "no click". Never
+promote a cursor estimate into an OBSERVED claim, and never invent a click position for a
+frame that has no estimate.
+
 ## Correlation is not causation
 
 The recording shows ordering, not mechanism. `The spinner appeared, then the error appeared`

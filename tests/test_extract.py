@@ -26,6 +26,11 @@ FIXTURE_SRC = ROOT / "tests" / "make_fixture.py"
 TRANSITIONS = [2.5, 5.0, 7.3, 9.5]
 TOLERANCE = 0.30
 
+# Click-driven transitions and where the fixture cursor rests when they fire
+# (see make_fixture.py). 9.5s is app-driven (spinner -> error): no click there.
+CLICK_TARGETS = [(2.5, 1105, 562), (5.0, 1105, 562), (7.3, 1095, 562)]
+CURSOR_TOL_PX = 45
+
 failures: list[str] = []
 
 
@@ -95,6 +100,30 @@ def main() -> int:
             sheet = out / m["contact_sheet"]
             check(sheet.exists() and sheet.stat().st_size > 5000,
                   "contact sheet is a non-trivial image")
+
+        # ---- cursor / click detection ------------------------------------
+        check(sel["candidates_found"] <= 10,
+              "cursor motion does not flood scene candidates",
+              f"got {sel['candidates_found']}")
+
+        for want_t, want_x, want_y in CLICK_TARGETS:
+            near = [f for f in frames if abs(f["t"] - want_t) <= TOLERANCE]
+            cur = near[0].get("cursor") if near else None
+            ok = (
+                cur is not None
+                and abs(cur["x"] - want_x) <= CURSOR_TOL_PX
+                and abs(cur["y"] - want_y) <= CURSOR_TOL_PX
+            )
+            check(ok, f"cursor located within {CURSOR_TOL_PX}px of click at ~{want_t}s",
+                  f"got {cur}, want ~({want_x},{want_y})")
+
+        near95 = [f for f in frames if abs(f["t"] - 9.5) <= TOLERANCE]
+        check(bool(near95) and near95[0].get("cursor") is None,
+              "app-driven transition at ~9.5s claims no cursor",
+              f"got {near95[0].get('cursor') if near95 else 'no frame'}")
+
+        check(frames[0].get("cursor") is None, "pinned initial frame has no cursor claim")
+        check(frames[-1].get("cursor") is None, "pinned final frame has no cursor claim")
 
         # Degenerate input: a completely static video must fall back, not crash.
         static = tmp / "static.mp4"

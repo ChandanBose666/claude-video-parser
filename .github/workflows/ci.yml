@@ -39,6 +39,9 @@ jobs:
       - name: Verify ffmpeg
         run: ffmpeg -version
 
+      - name: Cursor-detection unit tests
+        run: python tests/test_cursor_units.py
+
       - name: End-to-end extractor test
         run: python tests/test_extract.py
 

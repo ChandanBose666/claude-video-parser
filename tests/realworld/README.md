@@ -46,3 +46,32 @@ Findings:
 4. End-state frames duplicate when the recording lingers after the bug (three
    near-identical error frames on the checkout flow) — cosmetic, ~1.7k wasted
    tokens worst case.
+
+## Cursor/click detection results — 2026-08-09 (v1.1.0)
+
+`saucedemo-full` drives 8 ground-truth clicks (login, sort dropdown, two
+add-to-carts, cart, checkout, continue, finish) plus scrolling and form typing,
+recorded as VP8 and H.264 at 30fps CRF 23 and 60fps CRF 32.
+
+| Click | webm | 30fps CRF23 | 60fps CRF32 |
+|---|---|---|---|
+| login | 1.4px high | 1.4px high | 1.0px high |
+| open sort dropdown | 13px medium | 49px medium | 14px medium |
+| add onesie | abstain¹ | abstain¹ | abstain¹ |
+| add backpack | abstain¹ | abstain¹ | abstain¹ |
+| open cart | abstain¹ | abstain¹ | 19px medium |
+| checkout | 15px high | 15px high | 15px medium |
+| continue to overview | abstain² | abstain² | abstain² |
+| finish order | 1.4px high | 1.0px high | 1.0px high |
+
+¹ the selected frame trails the click by >1.2s (a later, larger change won NMS)
+— the staleness gate refuses old evidence rather than guessing.
+² the pointer was already resting on the button (3px approach); the only motion
+in the window was a blinking caret, which the shape gate rejects.
+
+**Zero wrong claims on any variant.** During development the caret produced a
+697px-off high-confidence estimate; the travel requirement and glyph-shape
+gates eliminated it. That case is locked in as unit tests. Spinner-dark and
+video-in-page (animation-dominated) correctly claim nothing. The fixture's
+synthetic cursor is located within 6–18px on all three clicks, with mandatory
+abstention on its app-driven spinner→error transition.

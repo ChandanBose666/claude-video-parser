@@ -201,6 +201,225 @@ def uniform_fallback(duration: float, n: int) -> list[tuple[float, float]]:
     return [(step * (i + 1), 0.0) for i in range(n)]
 
 
+# ------------------------------------------------------------ cursor detection
+
+# A click is inferred from motion: in the seconds before a UI transition, a moving
+# pointer is a small compact blob of inter-frame change, and the UI reacts where the
+# motion stopped. In-place change that never travels (spinner, caret) is not a pointer,
+# and an estimate is only reported with recent evidence — never guessed.
+# Constants are in terms of the low-res gray analysis frames.
+CURSOR_DIFF_MIN = 26          # gray8 inter-frame delta that counts as change
+CURSOR_SCAN_W = 320           # analysis frame width
+CURSOR_FPS = 10               # analysis sample rate
+CURSOR_MAX_AREA = 0.008       # blob bigger than this fraction of pixels: not a cursor
+CURSOR_MAX_DIAG = 0.15        # blob bbox diagonal beyond this fraction: not a cursor
+CURSOR_MIN_TRAVEL = 0.02      # cluster must move at least this fraction of the diagonal:
+                              # spinners, carets and blinking badges change in place;
+                              # a pointer travels. A single blip is ambiguous -> abstain.
+CURSOR_MIN_COUNT = 5          # blobs smaller than this many pixels are noise
+CURSOR_MAX_ASPECT = 5         # bbox longer than 5x its width is a line (caret, text row)
+CURSOR_COHERENT_STEP = 0.10   # successive centroids within this fraction = trajectory
+CURSOR_FRESH_S = 0.5          # evidence at most this old -> high confidence
+CURSOR_STALE_S = 1.2          # evidence older than this -> no estimate
+
+
+@dataclass
+class Blob:
+    count: int
+    cx: float
+    cy: float
+    bx0: int
+    by0: int
+    bx1: int
+    by1: int
+
+
+_THRESH_RE: dict[int, "re.Pattern[bytes]"] = {}
+
+
+def scan_diff_frame(buf: bytes, w: int, h: int,
+                    threshold: int = CURSOR_DIFF_MIN) -> Blob | None:
+    """Stats of the above-threshold pixels in one gray8 difference frame.
+
+    A regex over the raw bytes finds runs of changed pixels at C speed — no
+    per-pixel Python loop. Runs are split at row boundaries.
+    """
+    pat = _THRESH_RE.get(threshold)
+    if pat is None:
+        pat = re.compile(b"[" + re.escape(bytes([threshold])) + b"-\xff]+")
+        _THRESH_RE[threshold] = pat
+
+    count = 0
+    sx = 0.0
+    sy = 0.0
+    bx0 = by0 = 1 << 30
+    bx1 = by1 = -1
+    for m in pat.finditer(buf):
+        s, e = m.start(), m.end()
+        row = s // w
+        while s < e:
+            row_end = min(e, (row + 1) * w)
+            n = row_end - s
+            x0 = s - row * w
+            x1 = x0 + n - 1
+            count += n
+            sx += (x0 + x1) * n / 2
+            sy += row * n
+            bx0 = min(bx0, x0)
+            bx1 = max(bx1, x1)
+            by0 = min(by0, row)
+            by1 = max(by1, row)
+            s = row_end
+            row += 1
+    if count == 0:
+        return None
+    return Blob(count, sx / count, sy / count, bx0, by0, bx1, by1)
+
+
+def classify_blob(blob: Blob | None, w: int, h: int) -> str:
+    """'still' | 'cursor' (small, compact) | 'large' (scroll, transition, video).
+
+    A pointer is a compact 2D glyph. Blips that are too small or too elongated —
+    a blinking text caret (thin vertical line), a text row appearing during
+    typing (wide flat band), a stray speck — are noise, not a pointer, and are
+    treated as stillness so they neither claim a position nor block the walk.
+    """
+    if blob is None:
+        return "still"
+    if blob.count > CURSOR_MAX_AREA * w * h:
+        return "large"
+    if math.hypot(blob.bx1 - blob.bx0, blob.by1 - blob.by0) > CURSOR_MAX_DIAG * math.hypot(w, h):
+        return "large"
+    if blob.count < CURSOR_MIN_COUNT:
+        return "still"
+    bw = blob.bx1 - blob.bx0 + 1
+    bh = blob.by1 - blob.by0 + 1
+    if max(bw, bh) > CURSOR_MAX_ASPECT * min(bw, bh):
+        return "still"
+    return "cursor"
+
+
+def estimate_cursor(samples: list[tuple[float, Blob | None]], w: int, h: int,
+                    t_transition: float) -> dict | None:
+    """Pointer estimate from a window of diff-frame samples before a transition.
+
+    Walks backward: skips the trailing 'large' frames (the UI reaction itself),
+    then takes the most recent cluster of cursor-like motion. Rejects clusters
+    that never travel (spinner/caret) and evidence older than CURSOR_STALE_S.
+    """
+    diag = math.hypot(w, h)
+    classed = [(t, classify_blob(b, w, h), b) for t, b in samples]
+
+    # The window commonly ends [click motion][reaction][post-reaction stillness]:
+    # walk past the trailing stillness, then past the reaction, then collect.
+    i = len(classed) - 1
+    while i >= 0 and classed[i][1] == "still":
+        i -= 1
+    while i >= 0 and classed[i][1] == "large":
+        i -= 1
+    cluster: list[tuple[float, str, Blob]] = []
+    while i >= 0 and classed[i][1] != "large":
+        if classed[i][1] == "cursor":
+            cluster.append(classed[i])
+        i -= 1
+    cluster.reverse()
+    if not cluster:
+        return None
+
+    # Travel evidence: pointers move, spinners/carets/badges change in place.
+    if len(cluster) < 2:
+        return None
+    first = cluster[0][2]
+    max_disp = max(
+        math.hypot(b.cx - first.cx, b.cy - first.cy) for _, _, b in cluster
+    )
+    if max_disp < CURSOR_MIN_TRAVEL * diag:
+        return None
+
+    t_last, _, last = cluster[-1]
+    age = t_transition - t_last
+    if age > CURSOR_STALE_S:
+        return None
+
+    coherent = len(cluster) >= 3 and all(
+        math.hypot(b2.cx - b1.cx, b2.cy - b1.cy) <= CURSOR_COHERENT_STEP * diag
+        for (_, _, b1), (_, _, b2) in zip(cluster, cluster[1:])
+    )
+    return {
+        "x": last.cx,
+        "y": last.cy,
+        "detected_at_t": round(t_last, 3),
+        "confidence": "high" if coherent and age <= CURSOR_FRESH_S else "medium",
+    }
+
+
+def cursor_pass(video: Path, meta: "VideoMeta", frames: "list[FrameRec]",
+                window: float) -> None:
+    """Attach a pointer estimate to each scene-change frame, where evidence allows.
+
+    One ffmpeg call per frame decodes the pre-transition window at low resolution,
+    with tblend emitting inter-frame difference images on stdout.
+    """
+    if not meta.width or not meta.height:
+        return
+    sw = CURSOR_SCAN_W
+    sh = max(2, int(round(meta.height * sw / meta.width / 2)) * 2)
+    fsz = sw * sh
+    def scan_window(f: FrameRec, win: float):
+        # Sample up to the transition and no further: motion after it is the app
+        # reacting (spinners, page paint), not the user's pointer.
+        start = max(f.t - win, 0.0)
+        span = f.t - start
+        if span <= 0.2:
+            return None, []
+        p = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error",
+             "-ss", f"{start:.3f}", "-i", str(video),
+             "-t", f"{span:.3f}", "-an", "-sn",
+             "-vf", f"fps={CURSOR_FPS},scale={sw}:{sh},format=gray,"
+                    "tblend=all_mode=difference",
+             "-f", "rawvideo", "-"],
+            capture_output=True,
+        )
+        if p.returncode != 0 or not p.stdout:
+            return None, []
+        n = len(p.stdout) // fsz
+        if n < 2:
+            return None, []
+        # tblend's first output frame has no real predecessor; drop it.
+        samples = [
+            (start + j / CURSOR_FPS,
+             scan_diff_frame(p.stdout[j * fsz:(j + 1) * fsz], sw, sh))
+            for j in range(1, n)
+        ]
+        return estimate_cursor(samples, sw, sh, f.t), samples
+
+    for f in frames:
+        if f.reason != "scene-change":
+            continue
+        est, samples = scan_window(f, window)
+        if est is None and any(
+            classify_blob(b, sw, sh) == "cursor" for _, b in samples[:3]
+        ):
+            # Cursor-like motion right at the window's start edge means the window
+            # cut through a glide (the selected frame can trail the click when a
+            # later, bigger change won NMS). Retry wider — the staleness gate still
+            # bounds what the wider window may claim. A window that STARTS still
+            # (e.g. only caret blinks inside it) gets no retry: reaching further
+            # back could only surface older, unrelated motion.
+            est, _ = scan_window(f, window * 3)
+        if est is None:
+            continue
+        f.cursor = {
+            "x": int(round(est["x"] * meta.width / sw)),
+            "y": int(round(est["y"] * meta.height / sh)),
+            "norm_x": round(est["x"] / sw, 4),
+            "norm_y": round(est["y"] / sh, 4),
+            "detected_at_t": est["detected_at_t"],
+            "confidence": est["confidence"],
+        }
+
+
 # ------------------------------------------------------------------- extraction
 
 
@@ -213,6 +432,7 @@ class FrameRec:
     scene_score: float
     reason: str
     est_visual_tokens: int
+    cursor: dict | None = None
 
 
 def scale_filter(long_edge: int) -> str:
@@ -398,6 +618,10 @@ def main() -> int:
                     help="downscale long edge in px (default: 1024 ~= 800 visual tokens)")
     ap.add_argument("--quality", type=int, default=4,
                     help="ffmpeg -q:v for JPEG output, 2=best 31=worst (default: 4)")
+    ap.add_argument("--no-cursor", action="store_true",
+                    help="skip cursor/click estimation for scene-change frames")
+    ap.add_argument("--cursor-window", type=float, default=1.5,
+                    help="seconds of pre-transition motion to inspect for the pointer (default: 1.5)")
     ap.add_argument("--no-contact-sheet", action="store_true",
                     help="skip generating the grid overview image")
     ap.add_argument("--sheet-cols", type=int, default=4)
@@ -473,7 +697,11 @@ def main() -> int:
     for new_i, f in enumerate(frames, start=1):
         f.index = new_i
 
-    # 4. contact sheet ----------------------------------------------------------
+    # 4. cursor / click estimation ----------------------------------------------
+    if not args.no_cursor:
+        cursor_pass(video, meta, frames, args.cursor_window)
+
+    # 5. contact sheet ----------------------------------------------------------
     sheet = None
     if not args.no_contact_sheet:
         aspect = (meta.height / meta.width) if meta.width else 0.5625
@@ -481,12 +709,12 @@ def main() -> int:
             frames, outdir, args.sheet_cols, args.sheet_tile, aspect, has_drawtext()
         )
 
-    # 5. manifest ---------------------------------------------------------------
+    # 6. manifest ---------------------------------------------------------------
     total_tokens = sum(f.est_visual_tokens for f in frames)
     naive_2fps = int(meta.duration_s * 2) * visual_tokens(args.long_edge, int(args.long_edge * 0.5625))
     manifest = {
         "tool": "extract_keyframes.py",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "video": asdict(meta),
         "selection": {
             "strategy": "uniform-fallback" if used_fallback else "scene-change + temporal-NMS",
@@ -509,6 +737,10 @@ def main() -> int:
             "Audio is not processed. This tool is visual-only by design.",
             "scene_score 0.0 means the frame was pinned (initial/final state) or "
             "selected by uniform fallback, not that nothing changed.",
+            "cursor is INFERRED from pre-transition pointer motion, never observed "
+            "directly — cite it as [I] evidence, and treat null as 'no reliable "
+            "estimate' (keyboard-driven or app-driven transition, or no visible "
+            "pointer), not as 'no click happened'.",
         ],
     }
     (outdir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -533,7 +765,10 @@ def main() -> int:
         print(f"warning     {len(failures)} frame(s) failed to extract")
     print()
     for f in frames:
-        print(f"  {f.index:02d}  {f.timestamp}  score={f.scene_score:<8} {f.reason:<16} {f.file}")
+        cur = ""
+        if f.cursor:
+            cur = f"  cursor~({f.cursor['x']},{f.cursor['y']}) [{f.cursor['confidence']}]"
+        print(f"  {f.index:02d}  {f.timestamp}  score={f.scene_score:<8} {f.reason:<16} {f.file}{cur}")
     return 0
 
 

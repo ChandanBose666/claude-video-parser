@@ -32,6 +32,11 @@ Keep this to the steps that matter. Do not narrate frames that show no change.
 
 Measured durations, if any: `[O] spinner present <t1> → <t2> = <N.N>s`
 
+If the manifest carries a `cursor` estimate for the triggering frame:
+`[I] User appears to have clicked near (<x>, <y>) — the <control name> region (cursor
+estimate, <confidence> confidence, frame-NN).` Omit the line entirely when `cursor` is
+null — do not speculate about where the user clicked.
+
 ## On-screen text captured
 
 Quote exactly, character for character. Errors, toasts, banners, status text, visible IDs.

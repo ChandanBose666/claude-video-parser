@@ -21,6 +21,7 @@ still score high.
 """
 
 import json
+import math
 import subprocess
 import sys
 from pathlib import Path
@@ -76,6 +77,29 @@ def main() -> int:
                 best = (off, total)
         off = best[0]
 
+        # score cursor estimates against ground-truth click coordinates: the UI
+        # transition follows the click, so match each click to the nearest
+        # scene-change frame in [-0.3s, +1.2s] around it
+        click_rows = []
+        for e in events:
+            if "click" not in e:
+                continue
+            target = e["t"] + off
+            cand = [f for f in man["frames"]
+                    if f["reason"] == "scene-change" and -0.3 <= f["t"] - target <= 1.2]
+            if not cand:
+                click_rows.append({"click": e["event"], "frame": None,
+                                   "note": "no scene-change frame near this click"})
+                continue
+            fr = min(cand, key=lambda f: abs(f["t"] - target))
+            cur = fr.get("cursor")
+            row = {"click": e["event"], "frame_t": fr["t"], "cursor": bool(cur)}
+            if cur:
+                row["err_px"] = round(math.hypot(cur["x"] - e["click"][0],
+                                                 cur["y"] - e["click"][1]), 1)
+                row["confidence"] = cur["confidence"]
+            click_rows.append(row)
+
         results.append({
             "video": video.name,
             "strategy": man["selection"]["strategy"],
@@ -91,6 +115,7 @@ def main() -> int:
                 }
                 for e in events
             ],
+            "clicks": click_rows,
             "sheet": man["contact_sheet"],
         })
 

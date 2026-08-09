@@ -47,6 +47,21 @@ Useful flags:
 | `--threshold X` | Default `0.0015`. Raise to `0.01` if a noisy recording (video content, animated background) yields junk frames. Lower to `0.0005` if a genuinely subtle change was missed. |
 | `--min-gap S` | Default 0.5s. Raise to 1.5 if one long animation dominates the selection. |
 | `--long-edge N` | Default 1024 (~800 visual tokens/frame). Raise to 1568 only when on-screen text is unreadable. |
+| `--no-cursor` | Skip cursor/click estimation (see below) if it misbehaves on an exotic recording. |
+| `--cursor-window S` | Default 1.5s of pre-transition motion inspected for the pointer. |
+
+**Cursor / click estimation.** For each scene-change frame the extractor also inspects the
+seconds *before* the transition at low resolution: a moving pointer is a small compact blob
+of inter-frame change, and the UI reacts where the motion stopped. When the evidence is
+good enough, the frame's manifest entry carries
+`"cursor": {"x", "y", "norm_x", "norm_y", "detected_at_t", "confidence"}` — the estimated
+pointer position in source-video pixels just before that transition, i.e. *where the user
+most likely clicked*. `"cursor": null` means **no reliable estimate** (keyboard-driven or
+app-driven transition, pointer already resting on the target, no visible pointer) — it does
+not mean no click happened. Spinners, blinking carets and typing are recognised and never
+reported as a pointer. This is inferred, not observed: cite it as `[INFERRED]`, never as
+fact (validated on real recordings: located clicks land within ~1–50px; wrong claims were
+eliminated in favour of abstention).
 
 **Why these defaults matter.** ffmpeg's conventional scene threshold is `0.3`, tuned for film cuts. Measured UI transitions in screen recordings score **0.002–0.05** — a toast appearing changes maybe 4% of the frame. At `0.3` a screen recording returns zero scene changes, which is why most video tooling gives up and samples at a fixed fps instead. This script seeds low and then applies temporal non-maximum suppression, so a 400ms spinner animation contributes one frame rather than twelve.
 

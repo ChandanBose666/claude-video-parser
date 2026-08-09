@@ -7,6 +7,16 @@ between steps. That is the case naive scene detection fails on, and it is the ca
 skill's extractor is tuned for.
 
 Flow: cart -> address -> payment -> [spinner, 2s] -> error toast -> stuck on payment.
+
+A cursor (black arrow, white outline) glides to each button in the ~0.9s before each
+click-driven transition and rests there through it, parking elsewhere between clicks so
+every click is preceded by fresh motion. It does NOT move during the spinner->error
+transition at 9.5s — that one is app-driven, and cursor detection must stay silent there.
+
+Ground truth for tests (cursor hotspot at each click-driven transition):
+  2.5s -> (1105, 562)   Continue on cart
+  5.0s -> (1105, 562)   Continue on address
+  7.3s -> (1095, 562)   Pay button
 """
 
 from __future__ import annotations
@@ -150,24 +160,72 @@ def scene_error() -> Image.Image:
     return img
 
 
+# --------------------------------------------------------------------- cursor
+
+CURSOR_REST0 = (640, 400)
+CURSOR_PARK = (700, 350)
+CONTINUE_XY = (1105, 562)
+PAY_XY = (1095, 562)
+
+# (start, end, from, to) — linear position with smoothstep easing; rest between glides.
+GLIDES = [
+    (1.60, 2.35, CURSOR_REST0, CONTINUE_XY),
+    (2.80, 3.30, CONTINUE_XY, CURSOR_PARK),
+    (4.10, 4.85, CURSOR_PARK, CONTINUE_XY),
+    (5.40, 5.90, CONTINUE_XY, CURSOR_PARK),
+    (6.10, 6.85, CURSOR_PARK, PAY_XY),
+]
+
+
+def cursor_pos(t: float) -> tuple[float, float]:
+    pos = CURSOR_REST0
+    for t0, t1, a, b in GLIDES:
+        if t < t0:
+            return pos
+        if t <= t1:
+            u = (t - t0) / (t1 - t0)
+            u = u * u * (3 - 2 * u)
+            return (a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u)
+        pos = b
+    return pos
+
+
+def draw_cursor(img: Image.Image, xy: tuple[float, float]) -> None:
+    x, y = xy
+    pts = [(0, 0), (0, 17), (4.5, 13), (7.5, 20), (10.5, 18.5), (7.5, 12), (12.5, 12)]
+    d = ImageDraw.Draw(img)
+    d.polygon([(x + px, y + py) for px, py in pts], fill=(20, 20, 24), outline=(255, 255, 255))
+
+
 def build(out: Path) -> None:
-    frames: list[Image.Image] = []
+    cart = scene_cart()
+    address = scene_address()
+    payment = scene_payment()
+    pressed = scene_payment(pressed=True)
+    error = scene_error()
+    spinner_start = int(7.3 * FPS)
 
-    def hold(img: Image.Image, seconds: float) -> None:
-        frames.extend([img] * int(seconds * FPS))
+    def scene_at(i: int, t: float) -> Image.Image:
+        if t < 2.5:
+            return cart
+        if t < 5.0:
+            return address
+        if t < 7.0:
+            return payment
+        if t < 7.3:
+            return pressed
+        if t < 9.5:
+            return scene_spinner(((i - spinner_start) * 24) % 360)
+        return error
 
-    hold(scene_cart(), 2.5)
-    hold(scene_address(), 2.5)
-    hold(scene_payment(), 2.0)
-    hold(scene_payment(pressed=True), 0.3)
-    for i in range(int(2.2 * FPS)):
-        frames.append(scene_spinner((i * 24) % 360))
-    hold(scene_error(), 3.0)
-
+    total = int(12.5 * FPS)
     tmp = out.parent / "_frames"
     tmp.mkdir(parents=True, exist_ok=True)
-    for i, f in enumerate(frames):
-        f.save(tmp / f"{i:05d}.png")
+    for i in range(total):
+        t = i / FPS
+        img = scene_at(i, t).copy()
+        draw_cursor(img, cursor_pos(t))
+        img.save(tmp / f"{i:05d}.png")
 
     subprocess.run(
         ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
@@ -178,7 +236,7 @@ def build(out: Path) -> None:
     for p in tmp.glob("*.png"):
         p.unlink()
     tmp.rmdir()
-    print(f"wrote {out}  ({len(frames)} frames, {len(frames)/FPS:.1f}s)")
+    print(f"wrote {out}  ({total} frames, {total/FPS:.1f}s)")
 
 
 if __name__ == "__main__":

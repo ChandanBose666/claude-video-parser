@@ -150,6 +150,36 @@ class Recorder:
                 box["x"] + box["width"] / 2, box["y"] + box["height"] / 2, steps=25
             )
 
+    def click(self, selector, label):
+        """Glide to the element at human speed (~0.5s), settle, click — and log the
+        ground-truth click coordinates so cursor detection can be scored in pixels."""
+        loc = self.page.locator(selector)
+        loc.scroll_into_view_if_needed()  # raw mouse events do not auto-scroll
+        time.sleep(0.3)
+        box = loc.bounding_box()
+        if box is None:
+            self.page.click(selector)
+            self.mark(f"CLICK(?): {label}")
+            return
+        cx = box["x"] + box["width"] / 2
+        cy = box["y"] + box["height"] / 2
+        x0, y0 = getattr(self, "_xy", (VIEWPORT["width"] / 2, VIEWPORT["height"] / 2))
+        n = 8
+        for k in range(1, n + 1):
+            u = k / n
+            u = u * u * (3 - 2 * u)  # smoothstep easing, like a human hand
+            self.page.mouse.move(x0 + (cx - x0) * u, y0 + (cy - y0) * u)
+            time.sleep(0.06)
+        self._xy = (cx, cy)
+        time.sleep(0.25)
+        self.page.mouse.click(cx, cy)
+        self.events.append({
+            "t": round(time.monotonic() - self.t0, 2),
+            "event": f"CLICK: {label}",
+            "click": [round(cx), round(cy)],
+        })
+        print(f"  [{self.events[-1]['t']:6.2f}s] CLICK {label} @ ({round(cx)},{round(cy)})")
+
     def finish(self):
         video = self.page.video
         self.ctx.close()
@@ -260,12 +290,69 @@ def flow_video_in_page(pw):
     r.finish()
 
 
+def flow_saucedemo_full(pw):
+    """Richer journey: 9 logged clicks, a sort dropdown, scrolling, full checkout.
+    Every click carries ground-truth coordinates for scoring cursor detection."""
+    print("flow: saucedemo-full (real site, long journey, click ground truth)")
+    r = Recorder(pw, "saucedemo-full")
+    p = r.page
+    p.goto("https://www.saucedemo.com/", wait_until="networkidle")
+    r.start_clock()
+    r.mark("login page visible")
+    time.sleep(0.8)
+    p.fill("#user-name", "standard_user")
+    p.fill("#password", "secret_sauce")
+    time.sleep(0.5)
+    r.click("#login-button", "login")
+    p.wait_for_selector(".inventory_list")
+    r.mark("inventory page loaded")
+    time.sleep(1.0)
+    r.click(".product_sort_container", "open sort dropdown")
+    time.sleep(0.6)
+    p.select_option(".product_sort_container", "lohi")
+    r.mark("sorted by price low->high")
+    time.sleep(1.0)
+    r.click("#add-to-cart-sauce-labs-onesie", "add onesie to cart")
+    time.sleep(0.9)
+    p.mouse.wheel(0, 600)
+    r.mark("scrolled down inventory")
+    time.sleep(0.9)
+    p.mouse.wheel(0, -600)
+    r.mark("scrolled back up")
+    time.sleep(0.9)
+    r.click("#add-to-cart-sauce-labs-backpack", "add backpack to cart")
+    time.sleep(0.9)
+    r.click(".shopping_cart_link", "open cart")
+    p.wait_for_selector(".cart_list")
+    r.mark("cart page loaded")
+    time.sleep(1.0)
+    r.click("#checkout", "checkout")
+    p.wait_for_selector("#first-name")
+    r.mark("checkout form loaded")
+    time.sleep(0.8)
+    p.fill("#first-name", "Jane")
+    p.fill("#last-name", "Doe")
+    p.fill("#postal-code", "560001")
+    r.mark("checkout form filled")
+    time.sleep(0.6)
+    r.click("#continue", "continue to overview")
+    p.wait_for_selector(".summary_info")
+    r.mark("order overview loaded")
+    time.sleep(1.0)
+    r.click("#finish", "finish order")
+    p.wait_for_selector(".complete-header")
+    r.mark("BUG-FREE SURFACE: order complete page")
+    time.sleep(1.4)
+    r.finish()
+
+
 def main():
     with sync_playwright() as pw:
         flow_saucedemo_checkout(pw)
         flow_saucedemo_locked(pw)
         flow_spinner_dark(pw)
         flow_video_in_page(pw)
+        flow_saucedemo_full(pw)
     print(f"\nall recordings in {OUTDIR}")
 
 

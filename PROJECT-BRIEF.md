@@ -40,6 +40,7 @@ guardrails.** That is the whole product. Resist re-expanding it.
 | Contact sheet read before individual frames | One ~1k-token image usually answers the question. Error text is legible at tile resolution. Turns "view 14 images" into "view 1, then maybe 2". | Medium |
 | Three-tier evidence tagging `[O]` / `[I]` / `[?]` | The failure mode of video bug reports is confident invention — asserting "the API returned 500" from a spinner. A wrong report costs more than no report. | High — this is the other half of the product |
 | Explicit "Not determinable from this recording" section | Tells the developer what to go collect. Prevents the report being trusted further than it should be. | High |
+| Cursor detection abstains rather than guesses | Motion-only inference cannot always distinguish a pointer from typing/caret activity. Shape gates (compact 2D glyph), a travel requirement, and a 1.2s staleness gate each kill a measured real-world false positive (697px confident-wrong from a blinking caret). Result on the validation set: every located click ≤49px, zero wrong claims, honest nulls elsewhere. | High — loosening any gate re-admits a measured failure |
 
 ## Architecture
 
@@ -62,12 +63,17 @@ tests/
 3. Greedy temporal NMS → ≤ `max_frames - 2` picks
 4. Pin `initial-state` (~0.3s) and `final-state` (duration − 0.25s)
 5. Per-frame accurate seek + lanczos downscale to `--long-edge`
-6. `concat` + `tile` filtergraph → labelled contact sheet (`tile` consumes one stream, so
+6. Cursor/click estimation per scene-change frame: one ffmpeg decode of the pre-transition
+   window (low-res gray + `tblend` difference frames on stdout), a regex over raw bytes finds
+   changed-pixel blobs at C speed, then classify (compact glyph vs line/row/large) → walk
+   backward past the UI reaction → most recent *travelling* cluster = pointer; abstain on
+   spinners, carets, typing, staleness. Emitted as `cursor` in the manifest, always `[I]`.
+7. `concat` + `tile` filtergraph → labelled contact sheet (`tile` consumes one stream, so
    per-image chains must be concatenated first — this is the non-obvious bit). Labels pass
    an explicit `fontfile=` to drawtext: without one, drawtext consults fontconfig, which has
    no default config on Windows ffmpeg builds and kills the whole filtergraph. Falls back to
    an unlabelled sheet if no known font exists.
-7. `manifest.json` with per-frame token estimates and the naive-2fps comparison
+8. `manifest.json` with per-frame token estimates and the naive-2fps comparison
 
 ## Known gaps / candidate next work
 
@@ -81,8 +87,13 @@ Ranked by value, honestly:
    and selection degrades to ~uniform sampling — bug still captured, but the token advantage
    over naive 2fps collapses. The documented `--threshold 0.01` mitigation works (77→17
    candidates). This makes region-of-interest scoring (below) the fix with evidence behind it.
-2. **Cursor / click detection.** Locating the pointer at each transition would give "the user
-   clicked *here*", which is the single biggest thing missing from the report.
+2. ~~**Cursor / click detection.**~~ **Done 2026-08-09** — see the design spec in
+   `docs/superpowers/specs/` and results in `tests/realworld/README.md`. Pre-transition
+   motion analysis (stdlib + ffmpeg, no new dependencies), TDD'd with 21 unit checks and
+   7 new end-to-end checks. On the real 8-click validation flow: every located click within
+   1–49px (most ≤20px), zero wrong claims across codecs/fps/compression; abstains honestly
+   on keyboard/app-driven transitions, spinners, carets, and clicks whose selected frame
+   trails the click beyond the staleness gate.
 3. **Optional OCR pass** (tesseract, degrade gracefully if absent). Captures error text from
    frames never sent to the model. Cheap signal per token. Was scoped out of v1 deliberately.
 4. **Trace preference.** If a sibling `trace.zip` / `.har` / Cypress `screenshots/` exists next
@@ -95,8 +106,13 @@ Explicitly **not** planned: audio, YouTube, live browser control, auto-filing is
 
 ## How to evaluate a change
 
-Run `python3 tests/test_extract.py`. A change is a regression if it drops below 18 passing
-checks, or if `est_visual_tokens_all_frames` on the fixture rises above ~6,000.
+Run `python3 tests/test_extract.py` (25 end-to-end checks, including cursor localisation
+within 45px on the fixture's three clicks and mandatory abstention on the app-driven
+transition) and `python3 tests/test_cursor_units.py` (21 unit checks on the detection
+primitives). A change is a regression if either suite drops a check, or if
+`est_visual_tokens_all_frames` on the fixture rises above ~6,000. For threshold-affecting
+changes, also run the real-recording harness (`tests/realworld/`) and compare against the
+results table in its README — zero wrong cursor claims is a hard requirement.
 
 The metric that matters is not "did it extract frames" but **"did it capture every real
 transition in as few frames as possible."** The test asserts the first half directly (within
