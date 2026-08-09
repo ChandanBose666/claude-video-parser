@@ -1,8 +1,8 @@
 {
-  "name": "flow-recording-report",
-  "displayName": "Flow Recording Report",
+  "name": "claude-video-parser",
+  "displayName": "Claude Video Parser",
   "description": "Turn a screen recording of a broken UI flow into an evidence-bounded bug report: deterministic keyframe extraction, cursor/click inference, optional OCR, and an anti-hallucination report contract. Requires ffmpeg on PATH; tesseract optional for the OCR pass.",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "author": {
     "name": "Chandan Bose",
     "email": "bosechandan21@gmail.com"

@@ -1,6 +1,6 @@
 {
   "name": "claude-video-parser",
-  "description": "Skills for turning UI screen recordings into evidence-bounded bug reports",
+  "description": "Turn UI screen recordings into evidence-bounded bug reports",
   "owner": {
     "name": "Chandan Bose",
     "email": "bosechandan21@gmail.com",
@@ -8,13 +8,9 @@
   },
   "plugins": [
     {
-      "name": "flow-recording-report",
+      "name": "claude-video-parser",
       "source": "./",
-      "description": "Turn a screen recording of a broken UI flow into an evidence-bounded bug report: deterministic keyframe extraction, cursor/click inference, optional OCR, and an anti-hallucination report contract. Requires ffmpeg; tesseract optional.",
-      "version": "1.3.0",
-      "author": { "name": "Chandan Bose" },
-      "license": "MIT",
-      "keywords": ["video", "screen-recording", "bug-report", "qa", "ffmpeg", "keyframes"]
+      "description": "Turn a screen recording of a broken UI flow into an evidence-bounded bug report: deterministic keyframe extraction, cursor/click inference, optional OCR, and an anti-hallucination report contract. Requires ffmpeg; tesseract optional."
     }
   ]
 }

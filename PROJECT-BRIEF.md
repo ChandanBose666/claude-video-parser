@@ -104,7 +104,8 @@ Ranked by value, honestly:
    repo is now a Claude Code plugin marketplace (`.claude-plugin/marketplace.json` +
    `plugin.json`, `claude plugin validate . --strict` passes) — install with
    `/plugin marketplace add ChandanBose666/claude-video-parser` then
-   `/plugin install flow-recording-report@claude-video-parser`.
+   `/plugin install claude-video-parser@claude-video-parser` (marketplace and plugin
+   share one name since v1.3.1 so the catalog shows a single entry).
 4. ~~**Trace preference.**~~ **Done 2026-08-09 (v1.3.0)** — `find_richer_artifacts()` detects
    sibling `trace.zip` / `*trace*.zip` / `*.har` files and the Cypress `videos/` +
    `screenshots/` layout, surfaces them in the human output, stderr, and the manifest's
