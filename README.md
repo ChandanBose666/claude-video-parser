@@ -4,7 +4,7 @@ Skills for Claude Code / Claude Agent SDK. One skill per directory under `skills
 
 | Skill | What it does | Status |
 |---|---|---|
-| [`flow-recording-report`](skills/flow-recording-report) | Turns a screen recording of a broken UI flow into a structured, evidence-bounded bug report — keyframes, cursor/click inference, optional OCR | v1.2.0 |
+| [`flow-recording-report`](skills/flow-recording-report) | Turns a screen recording of a broken UI flow into a structured, evidence-bounded bug report — keyframes, cursor/click inference, optional OCR, ROI scoring, trace detection | v1.3.0 |
 
 ---
 

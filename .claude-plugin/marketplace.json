@@ -11,7 +11,7 @@
       "name": "flow-recording-report",
       "source": "./",
       "description": "Turn a screen recording of a broken UI flow into an evidence-bounded bug report: deterministic keyframe extraction, cursor/click inference, optional OCR, and an anti-hallucination report contract. Requires ffmpeg; tesseract optional.",
-      "version": "1.2.0",
+      "version": "1.3.0",
       "author": { "name": "Chandan Bose" },
       "license": "MIT",
       "keywords": ["video", "screen-recording", "bug-report", "qa", "ffmpeg", "keyframes"]

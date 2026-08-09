@@ -28,6 +28,12 @@ Confirm the file exists and get its duration before anything else:
 ffprobe -v error -show_entries format=duration:stream=width,height -of default=nw=1 <video>
 ```
 
+The extractor also checks for richer sibling artifacts (a `trace.zip`, any `.har`, a
+Cypress `screenshots/` directory beside the video) and reports them in its output and in
+the manifest's `richer_artifacts` field. **If any are found, stop and tell the user** — a
+trace carries the DOM, network, and console this recording cannot show; the video is the
+fallback, not the primary.
+
 If the user has not said what *should* have happened, ask now — one question. A bug report without an expected-behaviour statement is a description, not a report. If they are unavailable, proceed and mark the expected behaviour as `NOT PROVIDED` in the output.
 
 ### 2. Extract keyframes
@@ -51,6 +57,7 @@ Useful flags:
 | `--cursor-window S` | Default 1.5s of pre-transition motion inspected for the pointer. |
 | `--no-ocr` | Skip the OCR pass. It only runs when `tesseract` is on PATH anyway. |
 | `--ocr-lang L` | Tesseract language(s), default `eng`. Use e.g. `eng+deu` for mixed UIs. |
+| `--roi X,Y,W,H` | Score scene changes on this region only (frames still extracted full-size). The fix for recordings where a video player / canvas / animated background floods selection — when the extractor detects that, it prints the exact `--roi` to retry with. Validated: 76 candidates → 2, with the real UI change scored cleanly. |
 
 **Cursor / click estimation.** For each scene-change frame the extractor also inspects the
 seconds *before* the transition at low resolution: a moving pointer is a small compact blob

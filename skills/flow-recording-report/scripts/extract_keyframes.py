@@ -146,15 +146,25 @@ _FRAME_RE = re.compile(r"pts_time:([0-9]*\.?[0-9]+)")
 _SCORE_RE = re.compile(r"lavfi\.scene_score=([0-9]*\.?[0-9]+)")
 
 
-def scene_candidates(path: Path, seed_threshold: float) -> list[tuple[float, float]]:
-    """Return [(timestamp_seconds, scene_score)] for every frame above seed_threshold."""
+def scene_candidates(path: Path, seed_threshold: float,
+                     roi: tuple[int, int, int, int] | None = None) -> list[tuple[float, float]]:
+    """Return [(timestamp_seconds, scene_score)] for every frame above seed_threshold.
+
+    With an ROI, scoring happens on the cropped region only — the score is
+    normalised over the crop, so a small change inside a small ROI scores much
+    higher than the same change on the full frame. Frames are still extracted
+    at full size; the ROI affects selection only.
+    """
+    graph = f"select='gt(scene,{seed_threshold})',metadata=print:file=-"
+    if roi is not None:
+        x, y, w, h = roi
+        graph = f"crop={w}:{h}:{x}:{y}," + graph
     p = run(
         [
             "ffmpeg", "-hide_banner", "-nostats", "-loglevel", "error",
             "-i", str(path),
             "-an", "-sn",
-            "-filter_complex",
-            f"select='gt(scene,{seed_threshold})',metadata=print:file=-",
+            "-filter_complex", graph,
             "-f", "null", "-",
         ]
     )
@@ -192,6 +202,64 @@ def suppress(
         if len(kept) >= max_frames:
             break
     return sorted(kept)
+
+
+def parse_roi(s: str) -> tuple[int, int, int, int]:
+    """Parse 'x,y,w,h' (ints, w/h > 0). Raises ValueError on anything else."""
+    parts = [p.strip() for p in s.split(",")]
+    if len(parts) != 4:
+        raise ValueError(f"--roi wants x,y,w,h — got {s!r}")
+    x, y, w, h = (int(p) for p in parts)
+    if x < 0 or y < 0 or w <= 0 or h <= 0:
+        raise ValueError(f"--roi needs non-negative origin and positive size — got {s!r}")
+    return (x, y, w, h)
+
+
+def suggest_roi(hot: tuple[int, int, int, int], w: int, h: int) -> tuple[int, int, int, int] | None:
+    """Largest clean rectangle beside a continuously-changing region, or None.
+
+    The complement of a rectangle is not a rectangle, so pick the biggest of
+    the four bands around it (left / right / above / below). Below ~10% of the
+    frame there is nothing useful left to score on.
+    """
+    hx, hy, hw, hh = hot
+    bands = [
+        (0, 0, hx, h),                      # left of the hot region
+        (hx + hw, 0, w - hx - hw, h),       # right
+        (0, 0, w, hy),                      # above
+        (0, hy + hh, w, h - hy - hh),       # below
+    ]
+    best = max(bands, key=lambda r: r[2] * r[3])
+    if best[2] * best[3] < 0.1 * w * h:
+        return None
+    return best
+
+
+# ----------------------------------------------------------- richer artifacts
+
+
+def find_richer_artifacts(video: Path) -> list[str]:
+    """Sibling artifacts that beat pixels: traces, HARs, Cypress screenshots.
+
+    A trace or HAR carries the DOM/network/console this recording cannot show —
+    the skill's guidance is to read those first and treat the video as fallback.
+    """
+    out: list[str] = []
+    parent = video.parent
+    try:
+        entries = sorted(parent.iterdir(), key=lambda p: p.name.lower())
+    except OSError:
+        return out
+    for p in entries:
+        if not p.is_file():
+            continue
+        n = p.name.lower()
+        if n.endswith(".har") or (n.endswith(".zip") and "trace" in n):
+            out.append(p.name)
+    # Cypress layout: the video lives in videos/, screenshots/ sits beside it.
+    if parent.name.lower() == "videos" and (parent.parent / "screenshots").is_dir():
+        out.append("../screenshots/")
+    return out[:8]
 
 
 def uniform_fallback(duration: float, n: int) -> list[tuple[float, float]]:
@@ -418,6 +486,78 @@ def cursor_pass(video: Path, meta: "VideoMeta", frames: "list[FrameRec]",
             "detected_at_t": est["detected_at_t"],
             "confidence": est["confidence"],
         }
+
+
+# ---------------------------------------------------------- flood diagnostics
+
+# Continuously animating page content (video players, canvases) floods candidate
+# collection and degrades selection to ~uniform sampling — measured on real
+# recordings. When that happens, locate the region that changes in most sampled
+# frames and suggest the --roi that scores everything else instead. Explicit and
+# deterministic: the tool suggests, the user decides.
+FLOOD_FACTOR = 3      # candidates > this x max-frames triggers the hot-region scan
+HOT_SCAN_FPS = 4
+HOT_BLOCK = 40        # scan-space px per grid cell (320-wide scan -> 8 columns)
+HOT_FRAC = 0.5        # a cell changing in over half the samples is "hot"
+
+
+def detect_hot_region(video: Path, meta: "VideoMeta") -> tuple[int, int, int, int] | None:
+    """Bounding box (source px, x,y,w,h) of a region changing in most frames."""
+    if not meta.width or not meta.height:
+        return None
+    sw = CURSOR_SCAN_W
+    sh = max(2, int(round(meta.height * sw / meta.width / 2)) * 2)
+    fsz = sw * sh
+    p = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error",
+         "-i", str(video), "-an", "-sn",
+         "-vf", f"fps={HOT_SCAN_FPS},scale={sw}:{sh},format=gray,"
+                "tblend=all_mode=difference",
+         "-f", "rawvideo", "-"],
+        capture_output=True,
+    )
+    if p.returncode != 0 or not p.stdout:
+        return None
+    n = len(p.stdout) // fsz
+    if n < 4:
+        return None
+
+    pat = _THRESH_RE.get(CURSOR_DIFF_MIN)
+    if pat is None:
+        pat = re.compile(b"[" + re.escape(bytes([CURSOR_DIFF_MIN])) + b"-\xff]+")
+        _THRESH_RE[CURSOR_DIFF_MIN] = pat
+
+    counts: dict[tuple[int, int], int] = {}
+    for j in range(1, n):  # first tblend output has no real predecessor
+        buf = p.stdout[j * fsz:(j + 1) * fsz]
+        touched: set[tuple[int, int]] = set()
+        for m in pat.finditer(buf):
+            s, e = m.start(), m.end()
+            row = s // sw
+            while s < e:
+                row_end = min(e, (row + 1) * sw)
+                x0 = s - row * sw
+                x1 = row_end - 1 - row * sw
+                by = row // HOT_BLOCK
+                for bx in range(x0 // HOT_BLOCK, x1 // HOT_BLOCK + 1):
+                    touched.add((bx, by))
+                s = row_end
+                row += 1
+        for cell in touched:
+            counts[cell] = counts.get(cell, 0) + 1
+
+    hot = [c for c, k in counts.items() if k > HOT_FRAC * (n - 1)]
+    if not hot:
+        return None
+    bxs = [c[0] for c in hot]
+    bys = [c[1] for c in hot]
+    x0 = min(bxs) * HOT_BLOCK
+    x1 = min((max(bxs) + 1) * HOT_BLOCK, sw)
+    y0 = min(bys) * HOT_BLOCK
+    y1 = min((max(bys) + 1) * HOT_BLOCK, sh)
+    fx = meta.width / sw
+    fy = meta.height / sh
+    return (int(x0 * fx), int(y0 * fy), int((x1 - x0) * fx), int((y1 - y0) * fy))
 
 
 # --------------------------------------------------------------------- OCR pass
@@ -689,6 +829,10 @@ def main() -> int:
                          "finds nothing on a screen recording.")
     ap.add_argument("--min-score", type=float, default=0.0,
                     help="drop candidates scoring below this (default: 0.0, i.e. keep all; raise to ~0.005 if a noisy recording yields junk frames)")
+    ap.add_argument("--roi", type=parse_roi, default=None, metavar="X,Y,W,H",
+                    help="score scene changes on this region only (frames still extracted "
+                         "full-size). Use when animated content floods the selection — the "
+                         "extractor suggests one when it detects that.")
     ap.add_argument("--long-edge", type=int, default=1024,
                     help="downscale long edge in px (default: 1024 ~= 800 visual tokens)")
     ap.add_argument("--quality", type=int, default=4,
@@ -722,12 +866,36 @@ def main() -> int:
 
     meta = probe(video)
 
+    if args.roi is not None:
+        x, y, w, h = args.roi
+        if x + w > meta.width or y + h > meta.height:
+            die(f"--roi {x},{y},{w},{h} exceeds the {meta.width}x{meta.height} frame")
+
+    # Traces and HARs carry the DOM/network/console the video cannot show.
+    richer = find_richer_artifacts(video)
+    if richer:
+        print(
+            f"warning: richer artifact(s) next to the video: {', '.join(richer)} — "
+            "a trace/HAR beats pixels; consider reading that first",
+            file=sys.stderr,
+        )
+
     outdir: Path = (args.out or Path.cwd() / f"{video.stem}-keyframes").expanduser().resolve()
     outdir.mkdir(parents=True, exist_ok=True)
 
     # 1. candidates -------------------------------------------------------------
-    cands = scene_candidates(video, args.threshold)
+    cands = scene_candidates(video, args.threshold, args.roi)
     used_fallback = False
+
+    flooding = None
+    if args.roi is None and len(cands) > FLOOD_FACTOR * args.max_frames:
+        hot = detect_hot_region(video, meta)
+        if hot:
+            sug = suggest_roi(hot, meta.width, meta.height)
+            flooding = {
+                "hot_region": list(hot),
+                "suggested_roi": ",".join(map(str, sug)) if sug else None,
+            }
 
     picks = suppress(cands, args.max_frames - 2, args.min_gap, args.min_score)
 
@@ -798,7 +966,7 @@ def main() -> int:
     naive_2fps = int(meta.duration_s * 2) * visual_tokens(args.long_edge, int(args.long_edge * 0.5625))
     manifest = {
         "tool": "extract_keyframes.py",
-        "version": "1.2.0",
+        "version": "1.3.0",
         "video": asdict(meta),
         "selection": {
             "strategy": "uniform-fallback" if used_fallback else "scene-change + temporal-NMS",
@@ -806,10 +974,13 @@ def main() -> int:
             "min_score": args.min_score,
             "min_gap_s": args.min_gap,
             "max_frames": args.max_frames,
+            "roi": list(args.roi) if args.roi else None,
             "candidates_found": len(cands),
             "frames_kept": len(frames),
             "extraction_failures_at": failures,
+            "flooding": flooding,
         },
+        "richer_artifacts": richer,
         "cost": {
             "long_edge_px": args.long_edge,
             "est_visual_tokens_all_frames": total_tokens,
@@ -859,6 +1030,15 @@ def main() -> int:
     else:
         print("ocr         skipped (tesseract not on PATH)" if not args.no_ocr
               else "ocr         skipped (--no-ocr)")
+    if richer:
+        print(f"richer      {', '.join(richer)} found next to the video - a trace/HAR "
+              "beats pixels; read that first")
+    if flooding:
+        hx, hy, hw, hh = flooding["hot_region"]
+        hint = (f"retry with --roi {flooding['suggested_roi']}"
+                if flooding["suggested_roi"] else "retry with --threshold 0.01")
+        print(f"note        {len(cands)} candidates - a region at ({hx},{hy} {hw}x{hh}) "
+              f"changes continuously (video/animation?); {hint} to score the UI only")
     if used_fallback:
         print("note        no meaningful scene changes detected; the UI may be frozen, "
               "or lower --threshold and retry")

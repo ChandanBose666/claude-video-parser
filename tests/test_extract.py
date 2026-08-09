@@ -142,6 +142,49 @@ def main() -> int:
                 "ocr degrades to null without tesseract",
             )
 
+        # ---- richer sibling artifacts + ROI ------------------------------
+        check(m.get("richer_artifacts") == [],
+              "no richer artifacts reported when none exist",
+              f"got {m.get('richer_artifacts')!r}")
+
+        (tmp / "trace.zip").write_bytes(b"PK\x05\x06" + b"\x00" * 18)
+        fast = ["--no-cursor", "--no-ocr", "--no-contact-sheet", "--max-frames", "6"]
+        rp = subprocess.run(
+            [sys.executable, str(EXTRACT), str(video), "-o", str(tmp / "kf-richer"), *fast],
+            capture_output=True, text=True,
+        )
+        rm = json.loads((tmp / "kf-richer" / "manifest.json").read_text())
+        check("trace.zip" in rm.get("richer_artifacts", []),
+              "sibling trace.zip is surfaced in the manifest",
+              f"got {rm.get('richer_artifacts')!r}")
+        check("trace" in (rp.stderr + rp.stdout).lower(),
+              "sibling trace.zip is surfaced in the output")
+
+        # scoring on a region keeps working and is recorded in the manifest
+        pr = subprocess.run(
+            [sys.executable, str(EXTRACT), str(video), "-o", str(tmp / "kf-roi"),
+             "--roi", "300,190,920,430", *fast],
+            capture_output=True, text=True,
+        )
+        check(pr.returncode == 0, "--roi run exits 0", pr.stderr[:300])
+        pm = json.loads((tmp / "kf-roi" / "manifest.json").read_text())
+        check(pm["selection"]["roi"] == [300, 190, 920, 430],
+              "--roi recorded in the manifest", f"got {pm['selection'].get('roi')!r}")
+        check(pm["selection"]["strategy"].startswith("scene-change"),
+              "--roi run still finds scene changes",
+              f"got {pm['selection']['strategy']!r}")
+
+        bad = subprocess.run(
+            [sys.executable, str(EXTRACT), str(video), "--roi", "banana"],
+            capture_output=True, text=True,
+        )
+        check(bad.returncode != 0, "malformed --roi exits non-zero")
+        big = subprocess.run(
+            [sys.executable, str(EXTRACT), str(video), "--roi", "0,0,5000,5000"],
+            capture_output=True, text=True,
+        )
+        check(big.returncode != 0, "out-of-frame --roi exits non-zero")
+
         # Degenerate input: a completely static video must fall back, not crash.
         static = tmp / "static.mp4"
         subprocess.run(

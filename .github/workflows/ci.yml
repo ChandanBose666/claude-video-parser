@@ -45,6 +45,9 @@ jobs:
       - name: OCR unit tests
         run: python tests/test_ocr_units.py
 
+      - name: ROI and artifact-detection unit tests
+        run: python tests/test_misc_units.py
+
       - name: End-to-end extractor test
         run: python tests/test_extract.py
 

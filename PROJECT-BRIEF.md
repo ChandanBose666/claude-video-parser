@@ -105,21 +105,34 @@ Ranked by value, honestly:
    `plugin.json`, `claude plugin validate . --strict` passes) — install with
    `/plugin marketplace add ChandanBose666/claude-video-parser` then
    `/plugin install flow-recording-report@claude-video-parser`.
-4. **Trace preference.** If a sibling `trace.zip` / `.har` / Cypress `screenshots/` exists next
-   to the video, detect it and tell the user to use that instead. Currently only prose guidance.
-5. **Region-of-interest scoring.** Crop chrome/nav before scene scoring so the score reflects
-   the content area. Would raise sensitivity on subtle in-panel changes — and it is the
-   principled fix for the animation-flooding weak spot the validation confirmed.
+4. ~~**Trace preference.**~~ **Done 2026-08-09 (v1.3.0)** — `find_richer_artifacts()` detects
+   sibling `trace.zip` / `*trace*.zip` / `*.har` files and the Cypress `videos/` +
+   `screenshots/` layout, surfaces them in the human output, stderr, and the manifest's
+   `richer_artifacts` field; SKILL.md instructs stopping and telling the user. Unit + e2e
+   tested.
+5. ~~**Region-of-interest scoring.**~~ **Done 2026-08-09 (v1.3.0)** — `--roi X,Y,W,H` crops
+   *scoring only* (frames still extracted full-size); the score normalises over the crop, so
+   in-panel changes gain sensitivity. When candidate collection floods (> 3x max-frames),
+   the extractor locates the continuously-changing region (per-block change frequency over
+   the whole video) and prints the exact `--roi` to retry with — suggest, don't silently
+   crop. Validated on the animated-canvas recording: 76 candidates → 2, 9 frames → 4,
+   7.7k → 3.4k tokens, the banner transition selected cleanly and its full error string
+   captured by OCR.
 
-Explicitly **not** planned: audio, YouTube, live browser control, auto-filing issues.
+All five items above are now done. Explicitly **not** planned, still: audio, YouTube, live
+browser control, auto-filing issues. Candidate future work, unranked: perceptual dedup of
+near-identical end-state frames (~1.7k wasted tokens worst case), auto-ROI for browser
+chrome, validating OCR on non-English UIs.
 
 ## How to evaluate a change
 
-Run `python3 tests/test_extract.py` (27 end-to-end checks, including cursor localisation
-within 45px on the fixture's three clicks, mandatory abstention on the app-driven
-transition, and OCR behaviour on both the tesseract-present and -absent paths),
-`python3 tests/test_cursor_units.py` (21 unit checks) and `python3 tests/test_ocr_units.py`
-(8 unit checks). A change is a regression if any suite drops a check, or if
+Run `python3 tests/test_extract.py` (34 end-to-end checks: cursor localisation within 45px
+on the fixture's three clicks, mandatory abstention on the app-driven transition, OCR
+behaviour on both the tesseract-present and -absent paths, richer-artifact surfacing, and
+`--roi` behaviour incl. loud failure on bad input), `python3 tests/test_cursor_units.py`
+(21 unit checks), `python3 tests/test_ocr_units.py` (8) and `python3 tests/test_misc_units.py`
+(16, ROI parsing/suggestion + artifact detection). A change is a regression if any suite
+drops a check, or if
 `est_visual_tokens_all_frames` on the fixture rises above ~6,000. For threshold-affecting
 changes, also run the real-recording harness (`tests/realworld/`) and compare against the
 results table in its README — zero wrong cursor claims is a hard requirement.

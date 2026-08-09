@@ -69,6 +69,17 @@ recorded as VP8 and H.264 at 30fps CRF 23 and 60fps CRF 32.
 ² the pointer was already resting on the button (3px approach); the only motion
 in the window was a blinking caret, which the shape gate rejects.
 
+## ROI scoring results — 2026-08-09 (v1.3.0)
+
+On `video-in-page-30fps-crf23.mp4` (animated canvas beside a small UI change),
+the default run flooded (76 candidates) and the extractor's flood detector
+located the hot region at (0,0 640x480), suggesting `--roi 640,0,640,800`.
+With that ROI: 76 → 2 candidates, 9 → 4 frames, 7,659 → 3,404 tokens, the
+banner transition selected at exactly 3.20s, and its full error string read
+character-perfect by OCR ("Could not save: session expired — please log in
+again"). The suggest-don't-auto-crop loop closes the animation weak spot
+confirmed in the first validation round.
+
 **Zero wrong claims on any variant.** During development the caret produced a
 697px-off high-confidence estimate; the travel requirement and glyph-shape
 gates eliminated it. That case is locked in as unit tests. Spinner-dark and
