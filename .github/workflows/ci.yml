@@ -21,9 +21,9 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
 
-      - name: Install ffmpeg (Linux)
+      - name: Install ffmpeg + tesseract (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg tesseract-ocr
 
       - name: Install ffmpeg (macOS)
         if: runner.os == 'macOS'
@@ -41,6 +41,9 @@ jobs:
 
       - name: Cursor-detection unit tests
         run: python tests/test_cursor_units.py
+
+      - name: OCR unit tests
+        run: python tests/test_ocr_units.py
 
       - name: End-to-end extractor test
         run: python tests/test_extract.py

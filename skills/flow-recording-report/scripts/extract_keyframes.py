@@ -420,6 +420,80 @@ def cursor_pass(video: Path, meta: "VideoMeta", frames: "list[FrameRec]",
         }
 
 
+# --------------------------------------------------------------------- OCR pass
+
+# Optional: runs only when tesseract is on PATH, degrades to nothing when absent.
+# The value is cheap grep-able signal: error strings from frames that may never be
+# sent to a model. OCR output is machine-read and can be wrong — the skill's
+# evidence rules require confirming against the frame before quoting as observed.
+OCR_MIN_CONF = 55  # tesseract per-word confidence floor (0-100)
+
+
+def find_tesseract() -> str | None:
+    return shutil.which("tesseract")
+
+
+def parse_tesseract_tsv(tsv: str, min_conf: float = OCR_MIN_CONF) -> str | None:
+    """Confident words from tesseract TSV output, grouped into reading-order lines."""
+    rows = tsv.splitlines()
+    if len(rows) < 2:
+        return None
+    header = rows[0].split("\t")
+    try:
+        idx = {name: header.index(name)
+               for name in ("block_num", "par_num", "line_num", "conf", "text")}
+    except ValueError:
+        return None
+
+    lines: dict[tuple[str, str, str], list[str]] = {}
+    for r in rows[1:]:
+        cols = r.split("\t")
+        if len(cols) != len(header):
+            continue
+        try:
+            conf = float(cols[idx["conf"]])
+        except ValueError:
+            continue
+        text = cols[idx["text"]].strip()
+        if conf < min_conf or not text:
+            continue
+        key = (cols[idx["block_num"]], cols[idx["par_num"]], cols[idx["line_num"]])
+        lines.setdefault(key, []).append(text)
+    if not lines:
+        return None
+    return "\n".join(" ".join(words) for words in lines.values())
+
+
+def ocr_pass(frames: "list[FrameRec]", outdir: Path, lang: str) -> str | None:
+    """OCR each extracted frame in place. Returns the engine string, or None.
+
+    Frames are upscaled 2x (lanczos) before recognition — measured on real
+    recordings, this is the difference between missing and reading a 14px error
+    banner. Known limit: low-contrast colored-on-colored text (e.g. red toast
+    text on a dark red card) can still be missed; OCR here is a cheap grep
+    signal, not the evidence path — the frames themselves remain the evidence.
+    """
+    binary = find_tesseract()
+    if binary is None:
+        return None
+    ver = run([binary, "--version"])
+    engine = (ver.stdout or ver.stderr or "tesseract").splitlines()[0].strip() or "tesseract"
+    for f in frames:
+        big = outdir / f"._ocr-{f.file}.png"
+        try:
+            up = run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                      "-i", str(outdir / f.file),
+                      "-vf", "scale=iw*2:ih*2:flags=lanczos", str(big)])
+            src = big if up.returncode == 0 and big.exists() else outdir / f.file
+            p = run([binary, str(src), "stdout", "-l", lang, "--psm", "3", "tsv"])
+            if p.returncode != 0:
+                continue
+            f.ocr_text = parse_tesseract_tsv(p.stdout or "")
+        finally:
+            big.unlink(missing_ok=True)
+    return engine
+
+
 # ------------------------------------------------------------------- extraction
 
 
@@ -433,6 +507,7 @@ class FrameRec:
     reason: str
     est_visual_tokens: int
     cursor: dict | None = None
+    ocr_text: str | None = None
 
 
 def scale_filter(long_edge: int) -> str:
@@ -622,6 +697,10 @@ def main() -> int:
                     help="skip cursor/click estimation for scene-change frames")
     ap.add_argument("--cursor-window", type=float, default=1.5,
                     help="seconds of pre-transition motion to inspect for the pointer (default: 1.5)")
+    ap.add_argument("--no-ocr", action="store_true",
+                    help="skip the OCR pass even if tesseract is installed")
+    ap.add_argument("--ocr-lang", default="eng",
+                    help="tesseract language(s), e.g. eng or eng+deu (default: eng)")
     ap.add_argument("--no-contact-sheet", action="store_true",
                     help="skip generating the grid overview image")
     ap.add_argument("--sheet-cols", type=int, default=4)
@@ -701,7 +780,12 @@ def main() -> int:
     if not args.no_cursor:
         cursor_pass(video, meta, frames, args.cursor_window)
 
-    # 5. contact sheet ----------------------------------------------------------
+    # 5. OCR (optional, requires tesseract on PATH) ------------------------------
+    ocr_engine = None
+    if not args.no_ocr:
+        ocr_engine = ocr_pass(frames, outdir, args.ocr_lang)
+
+    # 6. contact sheet ----------------------------------------------------------
     sheet = None
     if not args.no_contact_sheet:
         aspect = (meta.height / meta.width) if meta.width else 0.5625
@@ -709,12 +793,12 @@ def main() -> int:
             frames, outdir, args.sheet_cols, args.sheet_tile, aspect, has_drawtext()
         )
 
-    # 6. manifest ---------------------------------------------------------------
+    # 7. manifest ---------------------------------------------------------------
     total_tokens = sum(f.est_visual_tokens for f in frames)
     naive_2fps = int(meta.duration_s * 2) * visual_tokens(args.long_edge, int(args.long_edge * 0.5625))
     manifest = {
         "tool": "extract_keyframes.py",
-        "version": "1.1.0",
+        "version": "1.2.0",
         "video": asdict(meta),
         "selection": {
             "strategy": "uniform-fallback" if used_fallback else "scene-change + temporal-NMS",
@@ -732,6 +816,16 @@ def main() -> int:
             "est_visual_tokens_naive_2fps": naive_2fps,
         },
         "contact_sheet": sheet,
+        "ocr": {
+            "engine": ocr_engine,
+            "note": (
+                "per-frame ocr_text is machine-read and may contain errors; "
+                "confirm against the frame before quoting a string as observed"
+                if ocr_engine else
+                "tesseract not found on PATH (or --no-ocr) — ocr_text is null "
+                "everywhere; install tesseract for grep-able frame text"
+            ),
+        },
         "frames": [asdict(f) for f in frames],
         "notes": [
             "Audio is not processed. This tool is visual-only by design.",
@@ -758,6 +852,13 @@ def main() -> int:
         print(f"overview    {sheet}   <- look at this first")
     print(f"est. cost   ~{total_tokens:,} visual tokens for all frames "
           f"(naive 2fps would be ~{naive_2fps:,})")
+    if ocr_engine:
+        n_text = sum(1 for f in frames if f.ocr_text)
+        print(f"ocr         {ocr_engine} - text captured on {n_text}/{len(frames)} "
+              f"frames (ocr_text in manifest.json)")
+    else:
+        print("ocr         skipped (tesseract not on PATH)" if not args.no_ocr
+              else "ocr         skipped (--no-ocr)")
     if used_fallback:
         print("note        no meaningful scene changes detected; the UI may be frozen, "
               "or lower --threshold and retry")

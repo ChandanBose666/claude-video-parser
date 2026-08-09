@@ -1,0 +1,14 @@
+{
+  "name": "flow-recording-report",
+  "displayName": "Flow Recording Report",
+  "description": "Turn a screen recording of a broken UI flow into an evidence-bounded bug report: deterministic keyframe extraction, cursor/click inference, optional OCR, and an anti-hallucination report contract. Requires ffmpeg on PATH; tesseract optional for the OCR pass.",
+  "version": "1.2.0",
+  "author": {
+    "name": "Chandan Bose",
+    "email": "bosechandan21@gmail.com"
+  },
+  "homepage": "https://github.com/ChandanBose666/claude-video-parser",
+  "repository": "https://github.com/ChandanBose666/claude-video-parser",
+  "license": "MIT",
+  "keywords": ["video", "screen-recording", "bug-report", "qa", "ffmpeg", "keyframes"]
+}

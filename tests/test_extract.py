@@ -125,6 +125,23 @@ def main() -> int:
         check(frames[0].get("cursor") is None, "pinned initial frame has no cursor claim")
         check(frames[-1].get("cursor") is None, "pinned final frame has no cursor claim")
 
+        # ---- OCR pass (optional dependency, both paths must hold) --------
+        ocr = m.get("ocr") or {}
+        if shutil.which("tesseract"):
+            check(bool(ocr.get("engine")), "ocr engine recorded when tesseract present",
+                  f"got {ocr!r}")
+            text = frames[-1].get("ocr_text") or ""
+            check("Payment failed" in text and "500 Internal Server Error" in text,
+                  "ocr captured the error toast text on the final frame",
+                  f"got {text!r}")
+        else:
+            print("  SKIP  ocr text checks (tesseract not on PATH)")
+            check(
+                ocr.get("engine") is None
+                and all(f.get("ocr_text") is None for f in frames),
+                "ocr degrades to null without tesseract",
+            )
+
         # Degenerate input: a completely static video must fall back, not crash.
         static = tmp / "static.mp4"
         subprocess.run(

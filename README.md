@@ -4,7 +4,7 @@ Skills for Claude Code / Claude Agent SDK. One skill per directory under `skills
 
 | Skill | What it does | Status |
 |---|---|---|
-| [`flow-recording-report`](skills/flow-recording-report) | Turns a screen recording of a broken UI flow into a structured, evidence-bounded bug report | v1.0.0 |
+| [`flow-recording-report`](skills/flow-recording-report) | Turns a screen recording of a broken UI flow into a structured, evidence-bounded bug report — keyframes, cursor/click inference, optional OCR | v1.2.0 |
 
 ---
 
@@ -58,7 +58,17 @@ That section is the point. A screen recording looks like complete evidence and i
 
 ## Install
 
-**Personal skill** (available in every project):
+**Via the Claude Code plugin marketplace** (recommended — works in the CLI and the IDE
+extensions; keeps the skill updatable):
+
+```
+/plugin marketplace add ChandanBose666/claude-video-parser
+/plugin install flow-recording-report@claude-video-parser
+```
+
+Restart Claude Code and confirm with `/plugin` or by asking Claude what skills it has.
+
+**Via install script** (copies the skill into `~/.claude/skills/`):
 
 ```bash
 # macOS / Linux
@@ -68,7 +78,7 @@ That section is the point. A screen recording looks like complete evidence and i
 .\scripts\install.ps1
 ```
 
-Installs to `~/.claude/skills/flow-recording-report`. Pass `--project` / `-Project` to install into `.claude/skills/` of the current repo instead.
+Pass `--project` / `-Project` to install into `.claude/skills/` of the current repo instead.
 
 **Manual:** copy `skills/flow-recording-report/` to `~/.claude/skills/`.
 
@@ -77,6 +87,8 @@ Installs to `~/.claude/skills/flow-recording-report`. Pass `--project` / `-Proje
 - `ffmpeg` and `ffprobe` on PATH
   - macOS `brew install ffmpeg` · Debian/Ubuntu `sudo apt install ffmpeg` · Windows `winget install Gyan.FFmpeg`
 - Python 3.10+ (stdlib only)
+- `tesseract` — **optional**, enables the per-frame OCR pass (grep-able frame text in the manifest)
+  - macOS `brew install tesseract` · Debian/Ubuntu `sudo apt install tesseract-ocr` · Windows `winget install UB-Mannheim.TesseractOCR`
 - Pillow — **tests only**, not needed at runtime
 
 ## Use
@@ -99,7 +111,7 @@ python3 -m pip install pillow
 python3 tests/test_extract.py
 ```
 
-Generates a synthetic checkout-flow video where only a small region changes between steps — the exact case naive scene detection fails on — then asserts the extractor lands within 300ms of all four known transitions, pins first/last state, beats 2fps sampling by ≥2x, falls back gracefully on a static video, and exits non-zero on a missing file. 18 checks, no test framework.
+Generates a synthetic checkout-flow video (with a moving cursor) where only a small region changes between steps — the exact case naive scene detection fails on — then asserts the extractor lands within 300ms of all four known transitions, locates the cursor within 45px of each click, abstains on the app-driven transition, captures the error toast via OCR when tesseract is present, pins first/last state, beats 2fps sampling by ≥2x, falls back gracefully on a static video, and exits non-zero on a missing file. Plus `tests/test_cursor_units.py` and `tests/test_ocr_units.py` for the detection primitives, and a real-recording validation harness in `tests/realworld/`. No test framework.
 
 ## Licence
 

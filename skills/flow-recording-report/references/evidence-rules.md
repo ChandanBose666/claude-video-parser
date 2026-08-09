@@ -45,6 +45,14 @@ about where the user clicked; null means no reliable estimate, not "no click". N
 promote a cursor estimate into an OBSERVED claim, and never invent a click position for a
 frame that has no estimate.
 
+## OCR text is a pointer, not a quote
+
+`ocr_text` in the manifest is machine-read and can contain recognition errors — dropped
+characters, wrong glyphs, clipped line starts. Use it to find which frame to look at.
+Before quoting a string as OBSERVED, read it off the frame itself; if you quote from OCR
+without visual confirmation, tag it `[I]` and say `via OCR`. Absence of text in `ocr_text`
+is never evidence of absence on screen — low-contrast text is routinely missed.
+
 ## Correlation is not causation
 
 The recording shows ordering, not mechanism. `The spinner appeared, then the error appeared`

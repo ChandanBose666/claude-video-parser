@@ -94,8 +94,17 @@ Ranked by value, honestly:
    1–49px (most ≤20px), zero wrong claims across codecs/fps/compression; abstains honestly
    on keyboard/app-driven transitions, spinners, carets, and clicks whose selected frame
    trails the click beyond the staleness gate.
-3. **Optional OCR pass** (tesseract, degrade gracefully if absent). Captures error text from
-   frames never sent to the model. Cheap signal per token. Was scoped out of v1 deliberately.
+3. ~~**Optional OCR pass**~~ **Done 2026-08-09 (v1.2.0)** — per-frame `ocr_text` in the
+   manifest when tesseract is on PATH, null everywhere otherwise (both paths tested in the
+   e2e suite; TSV parsing has its own unit suite, `tests/test_ocr_units.py`). Frames are
+   upscaled 2x before recognition — measured on real recordings, that is the difference
+   between missing and reading a 14px error banner. Known limit, documented in the skill:
+   low-contrast colored-on-colored text (red toast on dark red card) can still be missed,
+   so `ocr_text` is a grep pointer, never the evidence path. Also done the same day: the
+   repo is now a Claude Code plugin marketplace (`.claude-plugin/marketplace.json` +
+   `plugin.json`, `claude plugin validate . --strict` passes) — install with
+   `/plugin marketplace add ChandanBose666/claude-video-parser` then
+   `/plugin install flow-recording-report@claude-video-parser`.
 4. **Trace preference.** If a sibling `trace.zip` / `.har` / Cypress `screenshots/` exists next
    to the video, detect it and tell the user to use that instead. Currently only prose guidance.
 5. **Region-of-interest scoring.** Crop chrome/nav before scene scoring so the score reflects
@@ -106,10 +115,11 @@ Explicitly **not** planned: audio, YouTube, live browser control, auto-filing is
 
 ## How to evaluate a change
 
-Run `python3 tests/test_extract.py` (25 end-to-end checks, including cursor localisation
-within 45px on the fixture's three clicks and mandatory abstention on the app-driven
-transition) and `python3 tests/test_cursor_units.py` (21 unit checks on the detection
-primitives). A change is a regression if either suite drops a check, or if
+Run `python3 tests/test_extract.py` (27 end-to-end checks, including cursor localisation
+within 45px on the fixture's three clicks, mandatory abstention on the app-driven
+transition, and OCR behaviour on both the tesseract-present and -absent paths),
+`python3 tests/test_cursor_units.py` (21 unit checks) and `python3 tests/test_ocr_units.py`
+(8 unit checks). A change is a regression if any suite drops a check, or if
 `est_visual_tokens_all_frames` on the fixture rises above ~6,000. For threshold-affecting
 changes, also run the real-recording harness (`tests/realworld/`) and compare against the
 results table in its README — zero wrong cursor claims is a hard requirement.

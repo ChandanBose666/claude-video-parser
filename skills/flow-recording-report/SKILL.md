@@ -49,6 +49,8 @@ Useful flags:
 | `--long-edge N` | Default 1024 (~800 visual tokens/frame). Raise to 1568 only when on-screen text is unreadable. |
 | `--no-cursor` | Skip cursor/click estimation (see below) if it misbehaves on an exotic recording. |
 | `--cursor-window S` | Default 1.5s of pre-transition motion inspected for the pointer. |
+| `--no-ocr` | Skip the OCR pass. It only runs when `tesseract` is on PATH anyway. |
+| `--ocr-lang L` | Tesseract language(s), default `eng`. Use e.g. `eng+deu` for mixed UIs. |
 
 **Cursor / click estimation.** For each scene-change frame the extractor also inspects the
 seconds *before* the transition at low resolution: a moving pointer is a small compact blob
@@ -65,7 +67,19 @@ eliminated in favour of abstention).
 
 **Why these defaults matter.** ffmpeg's conventional scene threshold is `0.3`, tuned for film cuts. Measured UI transitions in screen recordings score **0.002–0.05** — a toast appearing changes maybe 4% of the frame. At `0.3` a screen recording returns zero scene changes, which is why most video tooling gives up and samples at a fixed fps instead. This script seeds low and then applies temporal non-maximum suppression, so a 400ms spinner animation contributes one frame rather than twelve.
 
+**OCR pass.** When `tesseract` is on PATH, each frame's manifest entry also carries
+`ocr_text` — machine-read text from that frame (frames are upscaled 2x first; this is what
+makes 14px error banners readable). Grep it for error strings *before* viewing any frame:
+an exact error string found in `ocr_text` tells you which single frame to view. OCR output
+can contain recognition errors — before quoting a string as `[OBSERVED]`, confirm it
+against the frame itself; low-contrast colored-on-colored text (a red toast on a dark red
+card) may be missed entirely, so absence of `ocr_text` never means absence of text. When
+tesseract is absent, `ocr_text` is null everywhere and the workflow is unchanged.
+
 ### 3. Read the contact sheet FIRST
+
+Before that, if OCR ran, skim the manifest's `ocr_text` fields — an error string there
+points you at the exact frame and costs zero visual tokens.
 
 View `contact-sheet.jpg` before any individual frame. It is one image (~1–1.5k visual tokens) showing every keyframe with its index and timestamp. For most bugs it is sufficient on its own.
 
