@@ -63,17 +63,24 @@ tests/
 4. Pin `initial-state` (~0.3s) and `final-state` (duration − 0.25s)
 5. Per-frame accurate seek + lanczos downscale to `--long-edge`
 6. `concat` + `tile` filtergraph → labelled contact sheet (`tile` consumes one stream, so
-   per-image chains must be concatenated first — this is the non-obvious bit)
+   per-image chains must be concatenated first — this is the non-obvious bit). Labels pass
+   an explicit `fontfile=` to drawtext: without one, drawtext consults fontconfig, which has
+   no default config on Windows ffmpeg builds and kills the whole filtergraph. Falls back to
+   an unlabelled sheet if no known font exists.
 7. `manifest.json` with per-frame token estimates and the naive-2fps comparison
 
 ## Known gaps / candidate next work
 
 Ranked by value, honestly:
 
-1. **Validate on real recordings.** Everything is tuned against one synthetic fixture. Thresholds
-   may need adjustment for compression noise, cursor movement, video-in-page, dark mode, and
-   30fps vs 60fps captures. **This is the highest-value next step by a wide margin** — do it
-   before adding any feature.
+1. ~~**Validate on real recordings.**~~ **Done 2026-08-09** — see `tests/realworld/README.md`.
+   Nine real Chromium recordings (real sites + local confounder pages; VP8 and H.264 at
+   30/60fps, CRF 23–32, dark mode, cursor glides, typing). The shipped defaults survived
+   unchanged: every ground-truth transition captured, bug surface within 0.24s on all nine.
+   Confirmed weak spot: continuously animating page content (canvas/video) floods candidates
+   and selection degrades to ~uniform sampling — bug still captured, but the token advantage
+   over naive 2fps collapses. The documented `--threshold 0.01` mitigation works (77→17
+   candidates). This makes region-of-interest scoring (below) the fix with evidence behind it.
 2. **Cursor / click detection.** Locating the pointer at each transition would give "the user
    clicked *here*", which is the single biggest thing missing from the report.
 3. **Optional OCR pass** (tesseract, degrade gracefully if absent). Captures error text from
@@ -81,7 +88,8 @@ Ranked by value, honestly:
 4. **Trace preference.** If a sibling `trace.zip` / `.har` / Cypress `screenshots/` exists next
    to the video, detect it and tell the user to use that instead. Currently only prose guidance.
 5. **Region-of-interest scoring.** Crop chrome/nav before scene scoring so the score reflects
-   the content area. Would raise sensitivity on subtle in-panel changes.
+   the content area. Would raise sensitivity on subtle in-panel changes — and it is the
+   principled fix for the animation-flooding weak spot the validation confirmed.
 
 Explicitly **not** planned: audio, YouTube, live browser control, auto-filing issues.
 

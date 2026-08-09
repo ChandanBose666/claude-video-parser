@@ -257,9 +257,38 @@ def has_drawtext() -> bool:
     return " drawtext " in (p.stdout or "")
 
 
+# Without an explicit fontfile, drawtext asks fontconfig for a default font, and
+# fontconfig has no default config on Windows builds (Gyan) — the whole filtergraph
+# fails with "Cannot load default config file". An explicit fontfile makes freetype
+# load the font directly and skips fontconfig entirely.
+_FONT_CANDIDATES = (
+    "C:/Windows/Fonts/consola.ttf",
+    "C:/Windows/Fonts/arial.ttf",
+    "C:/Windows/Fonts/segoeui.ttf",
+    "/System/Library/Fonts/Menlo.ttc",
+    "/System/Library/Fonts/Supplemental/Arial.ttf",
+    "/Library/Fonts/Arial.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+)
+
+
+def find_font() -> str | None:
+    for f in _FONT_CANDIDATES:
+        if Path(f).exists():
+            return f
+    return None
+
+
 def _dt_escape(s: str) -> str:
     """Escape a literal for ffmpeg drawtext's text= option."""
     return s.replace("\\", "\\\\").replace(":", r"\:").replace("'", r"\'")
+
+
+def _dt_path_escape(path: str) -> str:
+    """Escape a filesystem path for drawtext's fontfile= option (drive colons)."""
+    return path.replace("\\", "/").replace(":", r"\:")
 
 
 def contact_sheet(
@@ -284,46 +313,60 @@ def contact_sheet(
     tile_h = body_h + band
     rows = math.ceil(len(frames) / cols)
     dest = outdir / "contact-sheet.jpg"
+    font = find_font() if label else None
 
-    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y"]
-    for f in frames:
-        cmd += ["-i", str(outdir / f.file)]
+    def build_cmd(with_labels: bool) -> list[str]:
+        cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y"]
+        for f in frames:
+            cmd += ["-i", str(outdir / f.file)]
 
-    chains = []
-    for i, f in enumerate(frames):
-        vf = (
-            f"scale={tile_w}:{body_h}:force_original_aspect_ratio=decrease:flags=lanczos,"
-            f"pad={tile_w}:{tile_h}:(ow-iw)/2:{band}:color=0x101014,"
-            f"setsar=1,format=yuv420p"
-        )
-        if label:
-            text = _dt_escape(f"{f.index:02d}  {f.timestamp}  {f.reason}")
-            vf += (
-                f",drawtext=text='{text}':x=8:y=4:fontsize=17:"
-                f"fontcolor=0xE6E6EA"
+        chains = []
+        for i, f in enumerate(frames):
+            vf = (
+                f"scale={tile_w}:{body_h}:force_original_aspect_ratio=decrease:flags=lanczos,"
+                f"pad={tile_w}:{tile_h}:(ow-iw)/2:{band}:color=0x101014,"
+                f"setsar=1,format=yuv420p"
             )
-        chains.append(f"[{i}:v]{vf}[t{i}]")
+            if with_labels:
+                text = _dt_escape(f"{f.index:02d}  {f.timestamp}  {f.reason}")
+                fontopt = f"fontfile='{_dt_path_escape(font)}':" if font else ""
+                vf += (
+                    f",drawtext={fontopt}text='{text}':x=8:y=4:fontsize=17:"
+                    f"fontcolor=0xE6E6EA"
+                )
+            chains.append(f"[{i}:v]{vf}[t{i}]")
 
-    # Pad a ragged final row with blank tiles so the grid stays rectangular.
-    blanks = rows * cols - len(frames)
-    labels = "".join(f"[t{i}]" for i in range(len(frames)))
-    filt = ";".join(chains)
-    for b in range(blanks):
+        # Pad a ragged final row with blank tiles so the grid stays rectangular.
+        blanks = rows * cols - len(frames)
+        labels = "".join(f"[t{i}]" for i in range(len(frames)))
+        filt = ";".join(chains)
+        for b in range(blanks):
+            filt += (
+                f";color=c=0x101014:s={tile_w}x{tile_h}:d=1,setsar=1,"
+                f"format=yuv420p[b{b}]"
+            )
+            labels += f"[b{b}]"
+
+        n = rows * cols
         filt += (
-            f";color=c=0x101014:s={tile_w}x{tile_h}:d=1,setsar=1,"
-            f"format=yuv420p[b{b}]"
+            f";{labels}concat=n={n}:v=1:a=0[cat]"
+            f";[cat]tile={cols}x{rows}:padding=6:margin=6:color=0x101014[out]"
         )
-        labels += f"[b{b}]"
 
-    n = rows * cols
-    filt += (
-        f";{labels}concat=n={n}:v=1:a=0[cat]"
-        f";[cat]tile={cols}x{rows}:padding=6:margin=6:color=0x101014[out]"
-    )
+        cmd += ["-filter_complex", filt, "-map", "[out]",
+                "-frames:v", "1", "-q:v", "4", str(dest)]
+        return cmd
 
-    cmd += ["-filter_complex", filt, "-map", "[out]",
-            "-frames:v", "1", "-q:v", "4", str(dest)]
-    p = run(cmd)
+    p = run(build_cmd(with_labels=label))
+    if label and (p.returncode != 0 or not dest.exists()):
+        # drawtext can still fail (broken fontconfig and no known font, exotic
+        # builds). A sheet without labels beats no sheet.
+        print(
+            f"warning: labelled contact sheet failed, retrying without labels: "
+            f"{p.stderr.strip()[:200]}",
+            file=sys.stderr,
+        )
+        p = run(build_cmd(with_labels=False))
     if p.returncode != 0 or not dest.exists():
         print(f"warning: contact sheet failed: {p.stderr.strip()[:300]}", file=sys.stderr)
         return None
