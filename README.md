@@ -1,117 +1,139 @@
-# claude-skills
+# claude-video-parser
 
-Skills for Claude Code / Claude Agent SDK. One skill per directory under `skills/`.
+**Hand Claude Code a screen recording of a broken UI flow. Get back an evidence-bounded
+bug report** — which frame shows the failure, where the user clicked, what the error text
+says, and an honest list of what the video *cannot* prove.
 
-| Skill | What it does | Status |
-|---|---|---|
-| [`flow-recording-report`](skills/flow-recording-report) | Turns a screen recording of a broken UI flow into a structured, evidence-bounded bug report — keyframes, cursor/click inference, optional OCR, ROI scoring, trace detection | v1.3.0 |
+![Demo walkthrough](examples/demo.gif)
 
----
+Claude has no native video input — so this skill turns the recording into a handful of
+well-chosen keyframes (not 90 blind samples), reads one labelled contact sheet, and writes
+a report where every claim is tagged observed / inferred / not-determinable.
 
-## flow-recording-report
+## Quickstart
 
-### The problem it actually solves
-
-Claude has **no native video input** — the [vision docs](https://platform.claude.com/docs/en/build-with-claude/vision) are images only, and even animated GIFs are read first-frame-only. So any "video" workflow is really a frame-sampling workflow, and the naive version is expensive: a 45-second recording at 2 fps is 90 frames × ~1,300 visual tokens ≈ **117k tokens** to describe one bug.
-
-This skill is for the case where you **cannot reproduce the flow yourself** — a Loom from QA, a customer's screen capture, a video artifact from a CI failure. If the app is running on your machine, drive the browser with Playwright MCP or Chrome DevTools MCP instead; the DOM, console, and network beat pixels on every axis. The skill says so itself and declines.
-
-### Two things it does differently
-
-**1. Scene thresholds calibrated for UI, not film.**
-
-ffmpeg's conventional scene-change threshold is `0.3`, tuned for hard cuts in video. Measured on a screen recording of a checkout flow, real UI transitions score:
-
-| Transition | scene score |
-|---|---|
-| Cart → Address page | 0.0209 |
-| Address → Payment page | 0.0133 |
-| Button press → spinner | 0.0089 |
-| Spinner → error toast | 0.0155 |
-
-At `0.3`, a screen recording returns **zero** scene changes — which is why most video tooling abandons scene detection and falls back to fixed-fps sampling. This extractor seeds at `0.0015` and then applies **temporal non-maximum suppression**: candidates are ranked by score and greedily accepted only if they are ≥ `--min-gap` seconds from an already-accepted frame. A 400ms spinner animation contributes one frame instead of twelve.
-
-Result on the bundled fixture — a 12.5s recording with six distinct states:
-
-```
-strategy    scene-change + temporal-NMS  (5 candidates -> 6 frames)
-est. cost   ~4,662 visual tokens for all frames (naive 2fps would be ~19,425)
-```
-
-Six frames, every real transition captured, ~4x cheaper.
-
-**2. A labelled contact sheet, read first.**
-
-The extractor emits `contact-sheet.jpg`: every keyframe in one grid, each tile labelled with index, timestamp, and selection reason. That is **one image, ~1k visual tokens**, and for most bugs it is sufficient on its own — on the fixture, the error string `500 Internal Server Error - ref 8c1f42` is legible at contact-sheet resolution. Individual full-resolution frames are pulled only when needed. Binary search, not a dump.
-
-### What it deliberately does not do
-
-No audio, no transcription, no YouTube, no MCP server, no API keys, no model downloads. Stdlib Python + ffmpeg. If you need per-segment variable-fps extraction or audio, compose with [`claude-video-vision`](https://github.com/jordanrendric/claude-video-vision) — that plugin is a perception layer, this is a reporting contract, and they stack.
-
-### The reporting contract
-
-The other half of the skill is `references/evidence-rules.md`, which forces every claim into one of three tiers — `[O]` observed in a cited frame, `[I]` inferred, `[?]` not determinable — and requires an explicit **"Not determinable from this recording"** section listing what video physically cannot show: HTTP status codes, console errors, the DOM selector involved, application state, whether it reproduces.
-
-That section is the point. A screen recording looks like complete evidence and is not, and a confident wrong bug report costs a developer more time than no bug report.
-
----
-
-## Install
-
-**Via the Claude Code plugin marketplace** (recommended — works in the CLI and the IDE
-extensions; keeps the skill updatable):
+**1. Install the plugin** — inside Claude Code (CLI or IDE extension), run these two
+commands once. The first registers this repo as a plugin source, the second installs the
+skill from it:
 
 ```
 /plugin marketplace add ChandanBose666/claude-video-parser
 /plugin install flow-recording-report@claude-video-parser
 ```
 
-Restart Claude Code and confirm with `/plugin` or by asking Claude what skills it has.
+Restart Claude Code. (Prefer a plain copy? `./scripts/install.sh` or
+`.\scripts\install.ps1` puts the skill into `~/.claude/skills/` instead; `--project` /
+`-Project` scopes it to the current repo.)
 
-**Via install script** (copies the skill into `~/.claude/skills/`):
+**2. Make sure ffmpeg is on PATH** — the only hard requirement:
 
-```bash
-# macOS / Linux
-./scripts/install.sh
+| | |
+|---|---|
+| macOS | `brew install ffmpeg` |
+| Debian/Ubuntu | `sudo apt install ffmpeg` |
+| Windows | `winget install Gyan.FFmpeg` |
 
-# Windows PowerShell
-.\scripts\install.ps1
-```
+Optional but worth it: `tesseract` (`brew install tesseract` / `sudo apt install
+tesseract-ocr` / `winget install UB-Mannheim.TesseractOCR`) — adds grep-able OCR text for
+every extracted frame, so error strings are found before spending any visual tokens.
 
-Pass `--project` / `-Project` to install into `.claude/skills/` of the current repo instead.
+**3. Use it** — drag the video into the prompt (or type its path) and say what you expected:
 
-**Manual:** copy `skills/flow-recording-report/` to `~/.claude/skills/`.
+> QA sent me this recording of checkout breaking — `./bug.mp4`. Expected: clicking Pay
+> reaches the confirmation page.
 
-### Requirements
-
-- `ffmpeg` and `ffprobe` on PATH
-  - macOS `brew install ffmpeg` · Debian/Ubuntu `sudo apt install ffmpeg` · Windows `winget install Gyan.FFmpeg`
-- Python 3.10+ (stdlib only)
-- `tesseract` — **optional**, enables the per-frame OCR pass (grep-able frame text in the manifest)
-  - macOS `brew install tesseract` · Debian/Ubuntu `sudo apt install tesseract-ocr` · Windows `winget install UB-Mannheim.TesseractOCR`
-- Pillow — **tests only**, not needed at runtime
-
-## Use
-
-Once installed, just tell Claude:
-
-> QA sent me this recording of checkout breaking — `./bug.mp4`. Expected: clicking Pay goes to the confirmation page.
-
-Or invoke the extractor directly:
+Claude extracts keyframes, reads the contact sheet, and writes `BUG-REPORT.md`. That's the
+whole workflow. You can also run the extractor directly:
 
 ```bash
 python3 skills/flow-recording-report/scripts/extract_keyframes.py bug.mp4 -o ./out
 python3 skills/flow-recording-report/scripts/extract_keyframes.py bug.mp4 --json   # machine-readable
 ```
 
+## What you get
+
+One contact sheet like this (every keyframe, labelled, ~1k visual tokens total — for most
+bugs it is sufficient on its own):
+
+![Example contact sheet](examples/contact-sheet.example.jpg)
+
+...and a report ([full worked example](examples/BUG-REPORT.example.md)) whose claims look
+like this:
+
+```
+[O] Payment failed / 500 Internal Server Error - ref 8c1f42     (frames 05-06)
+[O] spinner present 00:07.3 -> 00:09.5 = 2.2s
+[I] user clicked near (1087, 561) - the Pay button region (high confidence)
+[?] actual HTTP status, console errors, whether it reproduces
+```
+
+`[O]` observed in a cited frame · `[I]` inferred · `[?]` not determinable from video. The
+`[?]` section is deliberate: it tells the developer what to go collect, and it stops the
+report being trusted further than pixels can support. A confident wrong bug report costs
+more time than no report.
+
+## When NOT to use it
+
+The skill declines, on purpose, when a better artifact exists:
+
+- **You can reproduce the bug locally** → drive the browser with Playwright MCP or Chrome
+  DevTools MCP instead. The DOM, console, and network beat pixels on every axis.
+- **A Playwright trace or HAR sits next to the video** → the extractor detects
+  `trace.zip` / `*.har` / Cypress `screenshots/` siblings automatically and tells you to
+  read those first. The video is the fallback, not the primary.
+
+## How it works, and why it's cheap
+
+**Scene thresholds calibrated for UI, not film.** ffmpeg's conventional scene threshold
+(`0.3`) is tuned for hard cuts; measured UI transitions in real screen recordings score
+**0.002–0.05** — a toast changes 4% of the frame. This extractor seeds at `0.0015`, then
+applies temporal non-maximum suppression so a 400ms animation contributes one frame, not
+twelve. On the bundled fixture: 6 frames, every transition captured, ~4,662 visual tokens
+where naive 2fps sampling would burn ~19,425.
+
+**Cursor/click inference.** For each transition, the seconds *before* it are scanned at
+low resolution for a small travelling blob — a pointer — and the report can say "the user
+clicked *here*". Validated against ground-truth clicks on real recordings: located clicks
+land 1–49px off, with **zero wrong claims** — spinners, blinking carets, and typing are
+recognised and never reported as a pointer. When evidence is weak it abstains rather than
+guesses.
+
+**Optional OCR.** With tesseract installed, every frame's text lands in the manifest
+(frames are upscaled 2× first — the difference between missing and reading a 14px error
+banner). Error strings become grep-able before any frame is viewed.
+
+**Region-of-interest scoring.** A video player or animated canvas in the recording floods
+scene detection. The extractor notices, locates the continuously-changing region, and
+prints the exact `--roi` to retry with — measured on a real recording, that took 76
+candidates down to 2 and still caught the bug at its exact timestamp.
+
+**What it deliberately does not do:** audio, transcription, YouTube, MCP servers, API
+keys, model downloads. Stdlib Python + ffmpeg. For per-segment variable-fps extraction or
+audio, compose with [`claude-video-vision`](https://github.com/jordanrendric/claude-video-vision) —
+that's a perception layer, this is a reporting contract, and they stack.
+
+## Repo layout
+
+| Path | What |
+|---|---|
+| `skills/flow-recording-report/` | The skill: SKILL.md, extractor script, evidence rules, report template |
+| `examples/` | Worked example: demo GIF, contact sheet, full bug report |
+| `tests/` | 79 checks across four suites + a real-recording validation harness (`tests/realworld/`) |
+| `PROJECT-BRIEF.md` | Design decisions, their reasoning, and the cost of reversing them |
+
 ## Test
 
 ```bash
 python3 -m pip install pillow
-python3 tests/test_extract.py
+python3 tests/test_extract.py        # 34 end-to-end checks on a synthetic fixture
+python3 tests/test_cursor_units.py   # 21 unit checks: cursor detection primitives
+python3 tests/test_ocr_units.py      #  8 unit checks: OCR TSV parsing
+python3 tests/test_misc_units.py     # 16 unit checks: ROI + artifact detection
 ```
 
-Generates a synthetic checkout-flow video (with a moving cursor) where only a small region changes between steps — the exact case naive scene detection fails on — then asserts the extractor lands within 300ms of all four known transitions, locates the cursor within 45px of each click, abstains on the app-driven transition, captures the error toast via OCR when tesseract is present, pins first/last state, beats 2fps sampling by ≥2x, falls back gracefully on a static video, and exits non-zero on a missing file. Plus `tests/test_cursor_units.py` and `tests/test_ocr_units.py` for the detection primitives, and a real-recording validation harness in `tests/realworld/`. No test framework.
+CI runs all four on Ubuntu, macOS, and Windows (Python 3.10 and 3.12). The real-recording
+harness (`tests/realworld/`, needs Playwright + network) records genuine browser flows
+with ground-truth events and click coordinates, and scores the extractor against them.
 
 ## Licence
 

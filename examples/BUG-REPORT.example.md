@@ -46,6 +46,10 @@ rather than a navigation.
 `[I]` 2.2s is short for a network timeout and long for a client-side validation rejection,
 which points at a server response rather than a timeout or a local guard.
 
+`[I]` User appears to have clicked near **(1087, 561)** — the **Pay $188.00** button region
+(cursor estimate, high confidence, `frame-04`). The spinner→error transition at 00:09.50
+carries no cursor estimate, consistent with an app-driven change rather than a second click.
+
 ## On-screen text captured
 
 ```
@@ -55,6 +59,9 @@ Payment failed                                    [O] frame-05, frame-06
 
 `[O]` `ref 8c1f42` appears to be a correlation identifier surfaced to the user. It is the most
 directly actionable item in this report — grep the server logs for it before anything else.
+
+Both strings were flagged by the manifest's `ocr_text` for frames 05–06 and confirmed by
+reading the frames (OCR alone is a pointer, not a quote — see the skill's evidence rules).
 
 ## Environment observed
 
